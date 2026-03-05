@@ -1,4 +1,7 @@
 python-dotenv
 requests
-python-telegram-bot
-
+feedparser
+google-genai
+Pillow
+trafilatura
+pytrends

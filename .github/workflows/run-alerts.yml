@@ -2,8 +2,8 @@ name: Run El-Mordjene Alerts Pipeline
 
 on:
   schedule:
-    # Every hour; adjust as needed
-    - cron: "0 * * * *"
+    # Every 3 hours; candidate collection only
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 
 jobs:
@@ -31,6 +31,7 @@ jobs:
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
         run: |
-          python main.py
+          python main.py --mode=candidates
 
