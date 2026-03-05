@@ -34,9 +34,9 @@ from sources.news_api_monitor import fetch_news_headlines
 from detection.spike_detector import detect_spikes
 from writer.article_generator import generate_article
 from publisher.wordpress_client import (
-    create_post, update_post_status, test_wordpress_connection,
-    LAST_PUBLISH_ERROR
+    create_post, update_post_status, test_wordpress_connection
 )
+import publisher.wordpress_client as wp_client
 from publisher.image_handler import generate_featured_image
 from notifications.telegram_bot import (
     send_trending_alert, send_simple_message, send_article_preview,
@@ -405,7 +405,7 @@ def _handle_approve(state, status="draft"):
 
         logger.info(f"✅ Article published: {article['title']} (ID: {post_id})")
     else:
-        error_msg = LAST_PUBLISH_ERROR or "Unknown error"
+        error_msg = wp_client.LAST_PUBLISH_ERROR or "Unknown error"
         send_simple_message(f"❌ Publish failed: {error_msg}")
 
 

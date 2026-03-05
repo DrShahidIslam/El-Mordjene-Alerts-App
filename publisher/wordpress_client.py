@@ -31,9 +31,16 @@ HEADERS = {
     "Referer": f"{config.WP_URL}/",
     "Accept": "application/json, */*; q=0.1",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
     "Origin": config.WP_URL.rstrip("/"),
 }
+
+def _safe_json(response, context_name=""):
+    try:
+        return response.json()
+    except ValueError:
+        text = response.text[:200] if response.text else "<empty body>"
+        logger.error(f"  {context_name} expected JSON but got HTTP {response.status_code}: {text}")
+        raise ValueError(f"WP non-JSON response ({response.status_code}) on {context_name}: {text}")
 
 
 def create_post(article, featured_image_path=None, status=None):
@@ -96,7 +103,7 @@ def create_post(article, featured_image_path=None, status=None):
                 timeout=TIMEOUT,
             )
             if response.status_code in (200, 201):
-                result = response.json()
+                result = _safe_json(response, "Post Creation")
                 post_id = result.get("id")
                 post_url = result.get("link", "")
 
@@ -163,8 +170,6 @@ def _publish_via_webhook(article, featured_image_path=None, status=None):
             "Content-Type": "application/json",
             "X-ElMordjene-Agent-Token": secret,
         })
-        if "Accept-Encoding" in headers:
-            del headers["Accept-Encoding"]
 
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=60)
@@ -221,7 +226,7 @@ def upload_media(file_path, title=""):
                 timeout=60,
             )
             if response.status_code in (200, 201):
-                media_id = response.json().get("id")
+                media_id = _safe_json(response, "Media Upload").get("id")
                 logger.info(f"  Image uploaded (Media ID: {media_id})")
 
                 if title:
@@ -258,7 +263,7 @@ def get_or_create_category(name):
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code == 200:
-            for cat in response.json():
+            for cat in _safe_json(response, "Get Category"):
                 if cat["name"].lower() == name.lower():
                     return cat["id"]
 
@@ -268,7 +273,7 @@ def get_or_create_category(name):
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code in (200, 201):
-            cat_id = response.json().get("id")
+            cat_id = _safe_json(response, "Create Category").get("id")
             logger.info(f"  Created category '{name}' (ID: {cat_id})")
             return cat_id
 
@@ -286,7 +291,7 @@ def get_or_create_tag(name):
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code == 200:
-            for tag in response.json():
+            for tag in _safe_json(response, "Get Tag"):
                 if tag["name"].lower() == name.lower():
                     return tag["id"]
 
@@ -296,7 +301,7 @@ def get_or_create_tag(name):
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code in (200, 201):
-            return response.json().get("id")
+            return _safe_json(response, "Create Tag").get("id")
 
     except Exception as e:
         logger.error(f"  Tag error for '{name}': {e}")
@@ -368,8 +373,6 @@ def _update_status_via_webhook(post_id, status="publish"):
             "Content-Type": "application/json",
             "X-ElMordjene-Agent-Token": secret,
         })
-        if "Accept-Encoding" in headers:
-            del headers["Accept-Encoding"]
 
         r = requests.post(
             url,
@@ -427,7 +430,7 @@ def test_wordpress_connection():
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code == 200:
-            posts = response.json()
+            posts = _safe_json(response, "Test Connection")
             if posts:
                 logger.info(f"WordPress: Connected. Latest: '{posts[0]['title']['rendered'][:50]}'")
             else:

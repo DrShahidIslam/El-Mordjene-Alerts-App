@@ -1,0 +1,36 @@
+﻿.venv\Scripts\python.exe : DE
+BUG:urllib3.connectionpool:St
+arting new HTTPS connection 
+(1): api.telegram.org:443
+At line:1 char:1
++ .venv\Scripts\python.exe 
+-m 
+notifications.telegram_bot > 
+test_bot_log ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
+    + CategoryInfo           
+   : NotSpecifi    ed: 
+(DEBUG:urllib3    
+.c...elegram.org:4    
+43:String) [], Rem    
+oteException
+    + FullyQualifiedEr    
+rorId : NativeComm    
+andError
+ 
+ERROR:__main__:Telegram 
+connection test failed: HTTPS
+ConnectionPool(host='api.tele
+gram.org', port=443): Max 
+retries exceeded with url: /b
+ot8764425447:AAGS0PDUHDk-5aiF
+UyPnfvAtyuBcuh68gDQ/getMe 
+(Caused by ConnectTimeoutErro
+r(<HTTPSConnection(host='api.
+telegram.org', port=443) at 
+0x15f0a42c710>, 'Connection 
+to api.telegram.org timed 
+out. (connect timeout=10)'))
+Bot connection failed. Check your TELEGRAM_BOT_TOKEN.
