@@ -17,6 +17,10 @@ import sys
 import time
 from datetime import datetime
 
+# Prevent UnicodeEncodeError when printing emojis to standard Windows consoles
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
 import config
 from database.db import (
     get_connection, cleanup_old_data, save_topic_to_cache,
