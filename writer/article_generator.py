@@ -229,8 +229,12 @@ def _parse_article_output(raw_text):
             result["tags"] = []
 
         # Extract CATEGORY
-        cat_match = re.search(r'CATEGORY:\s*(.+?)(?:\n|---)', raw_text, re.DOTALL)
+        cat_match = re.search(r'CATEGORY:\s*(.+?)(?:\n|LANGUAGE:)', raw_text, re.DOTALL)
         result["category"] = cat_match.group(1).strip() if cat_match else "Recipes"
+
+        # Extract LANGUAGE
+        lang_match = re.search(r'LANGUAGE:\s*(en|fr)(?:\n|---)', raw_text, re.IGNORECASE | re.DOTALL)
+        result["language"] = lang_match.group(1).strip().lower() if lang_match else "en"
 
         # Extract CONTENT
         content_match = re.search(r'---CONTENT_START---(.*?)---CONTENT_END---', raw_text, re.DOTALL)

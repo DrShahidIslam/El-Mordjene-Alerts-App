@@ -41,7 +41,7 @@ def fetch_news_headlines():
         logger.error(f"Failed to initialize NewsAPI client: {e}")
         return stories
 
-    # Search queries for food/recipe news
+    # Search queries for food/recipe news (English and French)
     search_queries = [
         "dubai chocolate recipe",
         "viral dessert recipe",
@@ -50,6 +50,9 @@ def fetch_news_headlines():
         "food ban 2025",
         "tiktok recipe trend",
         "candy making",
+        "recette algérienne",
+        "pâtisserie algérienne",
+        "recette virale",
     ]
 
     for query in search_queries:
@@ -59,7 +62,6 @@ def fetch_news_headlines():
 
             results = newsapi.get_everything(
                 q=query,
-                language="en",
                 sort_by="publishedAt",
                 from_param=from_date,
                 page_size=10

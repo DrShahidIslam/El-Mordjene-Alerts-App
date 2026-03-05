@@ -60,7 +60,12 @@ PRIMARY KEYWORD: {matched_keyword or topic_title}
 - Structure data for **Generative Search Engines**: Use clear, declarative sentences that are easy for AI models to parse and cite.
 - **EEAT**: Demonstrate expert-level insight by synthesizing source facts into a cohesive, helpful narrative.
 
-**3. STYLE CONSTRAINTS:**
+**3. LANGUAGE DETECTION & TRANSLATION:**
+- If the primary topic, keyword, or source material is in French (like "recette algérienne" or "pâtisserie algérienne"), write the ENTIRE article in French.
+- Otherwise, write the article in English.
+- NEVER mix the languages within the content body (except for proper nouns).
+
+**4. STYLE CONSTRAINTS:**
 - **NO EMOJIS**: Strictly prohibited in the article body and headings.
 - **NO DASHES**: Do not use dashes (—) for punctuation. Use commas, colons, or periods instead.
 - **Short Paragraphs**: 2 sentences max per <p> tag to ensure high readability scores.
@@ -211,6 +216,7 @@ META_DESCRIPTION: [your meta description]
 SLUG: [your-slug]
 TAGS: [tag1, tag2, tag3, ...]
 CATEGORY: Recipes
+LANGUAGE: [en or fr]
 
 ---CONTENT_START---
 [Generate the entire HTML structure exactly as specified in the HTML template above. CRITICAL: the FAQ JSON-LD schema at the end MUST be inside <script type="application/ld+json">...</script> tags! Output the RAW HTML directly without using ```html markdown tags!]

@@ -47,7 +47,6 @@ def fetch_youtube_videos():
                 "order": "date",
                 "maxResults": 5,
                 "publishedAfter": _get_recent_cutoff(),
-                "relevanceLanguage": "en",
                 "key": config.YOUTUBE_API_KEY,
             }
 

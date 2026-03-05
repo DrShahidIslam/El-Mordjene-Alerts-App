@@ -88,6 +88,7 @@ def create_post(article, featured_image_path=None, status=None):
         "categories": [category_id] if category_id else [],
         "tags": tag_ids,
         "comment_status": "open",
+        "lang": article.get("language", "en"),
     }
 
     if media_id:
@@ -166,6 +167,7 @@ def _publish_via_webhook(article, featured_image_path=None, status=None):
         "rank_math_title": article.get("title", ""),
         "rank_math_description": article.get("meta_description", ""),
         "rank_math_focus_keyword": article.get("matched_keyword", "") or (article.get("tags") or [""])[0],
+        "language": article.get("language", "en"),
     }
 
     acf_data = article.get("acf_fields", {})
