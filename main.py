@@ -574,7 +574,7 @@ def main():
         # Post-scan: listen for button presses
         if topics:
             logger.info("Waiting for Telegram commands after scan...")
-            poll_telegram_commands(state, timeout_seconds=120)
+            poll_telegram_commands(state, timeout_seconds=420)
 
         _save_state(state)
         logger.info("Single scan complete. Exiting.")
