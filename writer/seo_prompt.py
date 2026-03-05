@@ -181,8 +181,27 @@ EDITORIAL GUIDELINES:
 - If sources conflict, mention both perspectives.
 - Use short paragraphs (2-3 sentences max per paragraph).
 - Include transition words for SEO readability.
-- Reference ingredients, techniques, and cultural context naturally.
 - This site is an independent food resource, not affiliated with any brand.
+
+RECIPE DATA REQUIREMENTS:
+If the topic is a recipe (or if you generate a recipe within the article), you MUST extract the recipe details into a strict JSON format. 
+If it is NOT a recipe, output an empty JSON object {{}}.
+- "recipe_name": The name of the recipe (String).
+- "recipe_description": Short 1-2 sentence summary for schema (String).
+- "recipe_yield": e.g. "4 servings" (String).
+- "prep_time_minutes": Numeric value in minutes (Number).
+- "cook_time_minutes": Numeric value in minutes (Number).
+- "total_time_minutes": Optional, or blank to auto-calc (String).
+- "ingredients": One ingredient per line, separated by newlines within the string (String).
+- "instructions": One step per line, separated by newlines within the string (String).
+- "recipe_image": Leave empty, the system will populate this (String).
+- "nutrition_calories": e.g. "120 kcal" (String).
+- "video_url": ONLY include if the source material is from a YouTube video URL. Otherwise leave blank (String).
+- "author_name": Optional (String).
+- "recipe_keywords": Comma-separated keywords, e.g. "chocolate, dessert, viral" (String).
+- "recipecuisine": e.g. "International", "French" (String).
+- "recipecategory": e.g. "Dessert", "Chocolate" (String).
+- "video_upload_date": ONLY include if there's a video URL, format YYYY-MM-DD. Otherwise leave blank. (String).
 
 OUTPUT FORMAT:
 Return your response in this exact structured format:
@@ -196,6 +215,10 @@ CATEGORY: Recipes
 ---CONTENT_START---
 [Generate the entire HTML structure exactly as specified in the HTML template above. CRITICAL: the FAQ JSON-LD schema at the end MUST be inside <script type="application/ld+json">...</script> tags! Output the RAW HTML directly without using ```html markdown tags!]
 ---CONTENT_END---
+
+---RECIPE_DATA_START---
+[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. No extra formatting or markdown around the JSON.]
+---RECIPE_DATA_END---
 """
 
     return prompt

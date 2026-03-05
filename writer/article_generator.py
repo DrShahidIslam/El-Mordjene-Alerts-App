@@ -3,6 +3,7 @@ Article Generator — Uses Gemini to write SEO-optimized articles
 from source material gathered by the source fetcher.
 """
 import logging
+import json
 import re
 import time
 
@@ -251,6 +252,21 @@ def _parse_article_output(raw_text):
         result["content"] = content
         result["full_content"] = content
         result["faq_html"] = ""
+
+        # Extract RECIPE_DATA
+        recipe_match = re.search(r'---RECIPE_DATA_START---\s*(.*?)\s*---RECIPE_DATA_END---', raw_text, re.DOTALL)
+        result["acf_fields"] = {}
+        if recipe_match:
+            recipe_json_str = recipe_match.group(1).strip()
+            # Try to parse it
+            try:
+                recipe_data = json.loads(recipe_json_str)
+                if isinstance(recipe_data, dict) and recipe_data:
+                    # Filter out empty fields if desired, but here we just attach it
+                    result["acf_fields"] = recipe_data
+                    logger.info(f"  ✅ Parsed ACF recipe fields: {list(recipe_data.keys())}")
+            except Exception as e:
+                logger.warning(f"  ⚠️ Failed to parse RECIPE_DATA JSON: {e}")
 
         # Validate essential fields
         if not result["title"] or not result["content"]:
