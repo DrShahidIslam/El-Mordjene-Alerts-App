@@ -253,3 +253,20 @@ def cleanup_old_data(conn, days=7):
     conn.execute("DELETE FROM notifications_sent WHERE sent_at < ?", (old_cutoff.isoformat(),))
     conn.execute("DELETE FROM topic_cache WHERE recorded_at < ?", (old_cutoff.isoformat(),))
     conn.commit()
+
+def count_published_topics(conn, days=30):
+    """Count published topics in the last N days."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM published_topics WHERE published_at >= datetime('now', ?)",
+        (f"-{int(days)} days",)
+    ).fetchone()
+    return int(row["cnt"]) if row and row["cnt"] is not None else 0
+
+
+def get_recent_published_topics(conn, limit=100):
+    """Return recent published topics as (title, keywords, published_at)."""
+    rows = conn.execute(
+        "SELECT title, keywords, published_at FROM published_topics ORDER BY published_at DESC LIMIT ?",
+        (int(limit),)
+    ).fetchall()
+    return [(r["title"] or "", r["keywords"] or "", r["published_at"] or "") for r in rows]

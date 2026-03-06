@@ -1,9 +1,10 @@
-"""
-SEO Prompt Template — Master prompt for Gemini article generation.
+﻿"""
+SEO Prompt Template - Master prompt for Gemini article generation.
 Tailored for el-mordjene.info: food, recipes, chocolate, desserts, spreads.
 """
+import hashlib
 
-# Real internal links only — from existing published pages on el-mordjene.info
+# Real internal links only - from existing published pages on el-mordjene.info
 INTERNAL_LINKS = {
     "home": {"url": "https://el-mordjene.info/", "anchor": "El-Mordjene.info"},
     "what_is": {"url": "https://el-mordjene.info/what-is-el-mordjene/", "anchor": "What is El Mordjene?"},
@@ -23,7 +24,69 @@ INTERNAL_LINKS = {
 }
 
 
-def build_article_prompt(topic_title, source_texts, matched_keyword=""):
+
+
+
+def _pick_layout_variant(topic_title, matched_keyword):
+    variants = [
+        {
+            "name": "Explainer and Practical Steps",
+            "outline": [
+                "Start with the key question users ask now",
+                "Explain what changed and why the topic matters",
+                "Give practical steps readers can follow",
+                "Add common mistakes and fixes",
+                "Close with a concise FAQ section",
+            ],
+        },
+        {
+            "name": "Myth vs Fact and Action Plan",
+            "outline": [
+                "Summarize what is confirmed vs uncertain",
+                "Add a myth-vs-fact evidence section",
+                "Provide a do-this-next checklist",
+                "Cover substitutions and alternatives",
+                "Close with transactional FAQ questions",
+            ],
+        },
+        {
+            "name": "Chooser Guide",
+            "outline": [
+                "Define user intent and decision criteria",
+                "Compare options by quality, price, and availability",
+                "Highlight warning signs and authenticity checks",
+                "Explain who should choose which option",
+                "Close with FAQ answers to buying concerns",
+            ],
+        },
+        {
+            "name": "Trend Analysis and Regional Context",
+            "outline": [
+                "Describe why this trend accelerated",
+                "Compare US, EU, FR, or DZ angles when relevant",
+                "Explain social media influence",
+                "Add likely 30-90 day outlook",
+                "Close with short direct FAQ answers",
+            ],
+        },
+    ]
+
+    seed = f"{topic_title}|{matched_keyword}".strip().lower()
+    idx = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % len(variants)
+    return variants[idx]
+def _intent_guidance(intent):
+    intent_map = {
+        "recipe": "Focus on clear steps, ingredient substitutions, and practical tips. Keep claims concrete.",
+        "news": "Focus on what changed, why it matters now, and cite source-backed facts with caution language.",
+        "buyer": "Focus on availability, authenticity checks, pricing caveats, and decision criteria.",
+        "explainer": "Focus on definitions, context, misconceptions, and concise answers.",
+        "refresh": "Treat this as an update to an existing page. Emphasize what changed and refresh stale sections.",
+        "trend": "Focus on evidence of momentum, drivers of growth, and likely short-term direction.",
+    }
+    return intent_map.get((intent or "").strip().lower(), intent_map["explainer"])
+
+
+def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="general"):
     """
     Build the master SEO prompt for Gemini article generation.
     """
@@ -34,196 +97,96 @@ def build_article_prompt(topic_title, source_texts, matched_keyword=""):
 {src.get('text', '')[:2000]}
 """
 
-    links_suggestion = "\n".join([
+    links_suggestion = "\n".join(
         f"  - [{info['anchor']}]({info['url']})"
-        for key, info in INTERNAL_LINKS.items()
-    ])
+        for info in INTERNAL_LINKS.values()
+    )
 
-    prompt = f"""You are an expert food journalist, recipe developer, and master of Semantic Search, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization) for el-mordjene.info.
-Your articles must be engineered to rank instantly by providing high information density, clear entity relationships, and direct answers.
+    variant = _pick_layout_variant(topic_title, matched_keyword)
+    outline = "\n".join(f"  - {item}" for item in variant["outline"])
 
-TASK: Write a complete, publish-ready article about the following trending food/recipe topic.
+    prompt = f"""You are an expert food journalist and recipe writer for el-mordjene.info.
+Write one complete, publish-ready article with high factual reliability and high user value.
 
-TRENDING TOPIC: {topic_title}
-PRIMARY KEYWORD: {matched_keyword or topic_title}
+TASK:
+- TRENDING TOPIC: {topic_title}
+- PRIMARY KEYWORD: {matched_keyword or topic_title}
 
-─── SOURCE MATERIAL (use ONLY these facts, do NOT fabricate) ───
+SOURCE MATERIAL (use only these facts):
 {sources_block}
 
-─── ADVANCED OPTIMIZATION RULES (NON-NEGOTIABLE) ───
+NON-NEGOTIABLE RULES:
+1. Do not fabricate facts, prices, legal claims, ingredient data, or nutrition details.
+2. If sources conflict, mention that explicitly and present both sides.
+3. Use one language for the entire article: English OR French, never mixed.
+4. Keep primary keyword density under 0.8 percent in paragraph text.
+5. No emojis in body copy.
+6. Do not output WordPress block comments like <!-- wp:... -->.
 
-**1. KEYWORD DENSITY:** Ensure the primary keyword density is **strictly below 0.8%** in the paragraph text. Avoid keyword stuffing. Use synonyms and related entities instead.
+LAYOUT VARIANT TO USE:
+- Variant: {variant['name']}
+- Outline:
+{outline}
 
-**2. AEO & GEO OPTIMIZATION:**
-- Use **Answer Language Processing (ALP)**: Provide direct, factual, and concise answers to the core questions implied by the topic.
-- **Entity-Focused Writing**: Explicitly mention and connect key entities (ingredients, brands, regions, techniques). Use full names.
-- Structure data for **Generative Search Engines**: Use clear, declarative sentences that are easy for AI models to parse and cite.
-- **EEAT**: Demonstrate expert-level insight by synthesizing source facts into a cohesive, helpful narrative.
+INTENT GUIDANCE:
+- Intent: {intent}
+- {_intent_guidance(intent)}
 
-**3. LANGUAGE DETECTION & TRANSLATION:**
-- If the primary topic, keyword, or source material is in French (like "recette algérienne" or "pâtisserie algérienne"), write the ENTIRE article in French.
-- Otherwise, write the article in English.
-- NEVER mix the languages within the content body (except for proper nouns).
+STYLE REQUIREMENTS:
+- Output clean HTML only for the article body.
+- Use natural heading hierarchy with varied section names.
+- Keep paragraphs short and readable.
+- Include one key-takeaways box and one practical tip box.
+- Include one CTA section near the end with wording that matches the topic.
 
-**4. STYLE CONSTRAINTS:**
-- **NO EMOJIS**: Strictly prohibited in the article body and headings.
-- **NO DASHES**: Do not use dashes (—) for punctuation. Use commas, colons, or periods instead.
-- **Short Paragraphs**: 2 sentences max per <p> tag to ensure high readability scores.
-- **Warm & instructional tone**: Write like a passionate home chef sharing secrets with a friend, not a textbook.
+FAQ AND SCHEMA RULES:
+- Add FAQ only if it helps search intent.
+- If FAQ is included, include valid FAQPage JSON-LD wrapped in:
+  <script type="application/ld+json"> ... </script>
+- Do NOT include Recipe JSON-LD in the HTML body.
+- Recipe schema is generated by the system separately for real recipe posts.
 
-**4. SCHEMA TAGS (CRITICAL):** The JSON-LD FAQ schema MUST be strictly wrapped in `<script type="application/ld+json">` and `</script>` tags. Without these tags, the schema will display visibly as text, which ruins the page layout. Do not forget the script tags!
+INTERNAL LINKING RULES:
+- Use exactly 2-3 internal links from the approved list below.
+- Never invent URLs.
 
-─── ARTICLE STRUCTURE ───
-
-1. TITLE: SEO-optimized, under 60 chars.
-2. META_DESCRIPTION: 150-155 characters. Start with an action verb.
-3. SLUG: Keyword-rich, lowercase, hyphens only.
-4. ARTICLE BODY: Magazine-quality HTML (design details below).
-5. FAQ: 3-4 schema-ready questions with food-specific, helpful answers.
-
-**1. NO WORDPRESS BLOCK COMMENTS**: Do NOT output any `<!-- wp:... -->` comments. Produce strictly raw HTML.
-
-**2. FOLLOW THIS EXACT HTML TEMPLATE** (Copy the structure and inline styles exactly):
-
-<div class="wp-block-group" style="padding:1.5rem 2rem 2.5rem 2rem">
-
-<h2 class="wp-block-heading">[Your Main Heading]</h2>
-<p>[Engaging intro that hooks the reader with a question or surprising fact...]</p>
-<p>[More text establishing context and why this matters now...]</p>
-
-<div style="border-left: 4px solid #d4a574;padding: 1rem 1.25rem;margin: 1.5rem 0;border-radius: 0 8px 8px 0;background-color:#fdf6f0;color:#000000;">
-<h3 style="margin: 0 0 0.75rem 0;font-size: 1.1rem;color:#000000;">Key Facts</h3>
-<ul style="margin: 0;padding-left: 1.25rem;line-height: 1.6;color:#000000;">
-<li>[Fact 1]</li>
-<li>[Fact 2]</li>
-<li>[Fact 3]</li>
-</ul>
-</div>
-
-<h2>[Next Section Heading]</h2>
-<p>[Section text... example internal link: <a href="https://el-mordjene.info/homemade-chocolate-recipes/">homemade chocolate recipes</a>...]</p>
-
-<div style="padding: 1rem 1.25rem;margin: 1.5rem 0;border: 1px solid #d4a574;border-radius: 8px;background-color:#fdf6f0;color:#000000;">
-<strong>Pro Tip:</strong> [A practical cooking tip, ingredient substitution, or time-saver related to the recipe/topic.]
-</div>
-
-<h2>[Another Section Heading]</h2>
-<p>[Content...]</p>
-
-<div style="display:block !important; padding:2rem !important; margin:2rem 0 !important; border-radius:12px !important; background:linear-gradient(135deg,#3d2b1f,#5c3d2e,#8b6914) !important; text-align:center !important; box-shadow:0 10px 20px rgba(0,0,0,0.15) !important; border-left:5px solid #d4a574 !important;">
-<p style="font-size:1.5rem !important; font-weight:800 !important; margin:0 0 0.5rem 0 !important; text-transform:uppercase !important; letter-spacing:1px !important; color:#ffffff !important;">Explore More Recipes</p>
-<p style="font-size:1.1rem !important; color:#f5e6d3 !important; font-weight:400 !important; margin:0 0 1rem 0 !important;">Discover viral desserts, homemade chocolate, and gourmet spreads</p>
-<a href="https://el-mordjene.info/" style="display:inline-block !important; padding:0.75rem 2rem !important; background:#d4a574 !important; color:#ffffff !important; text-decoration:none !important; border-radius:8px !important; font-weight:700 !important; font-size:1rem !important; letter-spacing:0.5px !important;">Visit El-Mordjene.info &rarr;</a>
-</div>
-
-<h2>Frequently Asked Questions</h2>
-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 1?]</h3>
-<p style="margin: 0;color:#000000;">[Answer to Question 1.]</p>
-</div>
-</div>
-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 2?]</h3>
-<p style="margin: 0;color:#000000;">[Answer to Question 2.]</p>
-</div>
-</div>
-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 3?]</h3>
-<p style="margin: 0;color:#000000;">[Answer to Question 3.]</p>
-</div>
-</div>
-
-<!-- CRITICAL: DO NOT FORGET THESE SCRIPT TAGS AROUND THE JSON! -->
-<script type="application/ld+json">
-{{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    {{
-      "@type": "Question",
-      "name": "[Question 1?]",
-      "acceptedAnswer": {{
-        "@type": "Answer",
-        "text": "[Answer to Question 1.]"
-      }}
-    }},
-    {{
-      "@type": "Question",
-      "name": "[Question 2?]",
-      "acceptedAnswer": {{
-        "@type": "Answer",
-        "text": "[Answer to Question 2.]"
-      }}
-    }},
-    {{
-      "@type": "Question",
-      "name": "[Question 3?]",
-      "acceptedAnswer": {{
-        "@type": "Answer",
-        "text": "[Answer to Question 3.]"
-      }}
-    }}
-  ]
-}}
-</script>
-</div>
-
-INTERNAL LINKING RULES (STRICT):
-- ONLY use genuine links from the list below. Do NOT invent any internal URL.
-- Include 2-3 genuine internal links, naturally placed where they fit the topic.
-- Use the exact URL and suggested anchor text. Format: <a href="EXACT_URL">anchor text</a>
-
-Allowed genuine internal links:
+Allowed internal links:
 {links_suggestion}
 
-EDITORIAL GUIDELINES:
-- Tone: Warm, instructional, and passionate. Write like a beloved food blogger.
-- Word count: 800-1500 words
-- NEVER fabricate facts, recipes, nutritional data, or ingredient amounts.
-- If sources conflict, mention both perspectives.
-- Use short paragraphs (2-3 sentences max per paragraph).
-- Include transition words for SEO readability.
-- This site is an independent food resource, not affiliated with any brand.
-
 RECIPE DATA REQUIREMENTS:
-If the topic is a recipe (or if you generate a recipe within the article), you MUST extract the recipe details into a strict JSON format. 
-If it is NOT a recipe, output an empty JSON object {{}}.
-- "recipe_name": The name of the recipe (String).
-- "recipe_description": Short 1-2 sentence summary for schema (String).
-- "recipe_yield": e.g. "4 servings" (String).
-- "prep_time_minutes": Numeric value in minutes (Number).
-- "cook_time_minutes": Numeric value in minutes (Number).
-- "total_time_minutes": Optional, or blank to auto-calc (String).
-- "ingredients": One ingredient per line, separated by newlines within the string (String).
-- "instructions": One step per line, separated by newlines within the string (String).
-- "recipe_image": Leave empty, the system will populate this (String).
-- "nutrition_calories": e.g. "120 kcal" (String).
-- "video_url": ONLY include if the source material is from a YouTube video URL. Otherwise leave blank (String).
-- "author_name": Optional (String).
-- "recipe_keywords": Comma-separated keywords, e.g. "chocolate, dessert, viral" (String).
-- "recipecuisine": e.g. "International", "French" (String).
-- "recipecategory": e.g. "Dessert", "Chocolate" (String).
-- "video_upload_date": ONLY include if there's a video URL, format YYYY-MM-DD. Otherwise leave blank. (String).
+If this is a real recipe article, output a strict JSON object. If not, output {{}}.
+Required JSON fields:
+- recipe_name (string)
+- recipe_description (string)
+- recipe_yield (string)
+- prep_time_minutes (number)
+- cook_time_minutes (number)
+- total_time_minutes (string, optional)
+- ingredients (string, one ingredient per line)
+- instructions (string, one step per line)
+- recipe_image (string, keep empty)
+- nutrition_calories (string)
+- video_url (string, empty if none)
+- author_name (string, optional)
+- recipe_keywords (string)
+- recipecuisine (string)
+- recipecategory (string)
+- video_upload_date (YYYY-MM-DD or empty)
 
-OUTPUT FORMAT:
-Return your response in this exact structured format:
-
-TITLE: [your title]
-META_DESCRIPTION: [your meta description]
-SLUG: [your-slug]
-TAGS: [tag1, tag2, tag3, ...]
-CATEGORY: [Choose the most appropriate single category: Recipes OR Food News OR Trends OR Sweets]
+OUTPUT FORMAT (STRICT):
+TITLE: [under 60 chars]
+META_DESCRIPTION: [140-160 chars]
+SLUG: [lowercase-hyphenated]
+TAGS: [tag1, tag2, tag3]
+CATEGORY: [Recipes OR Food News OR Trends OR Sweets]
 LANGUAGE: [en or fr]
 
 ---CONTENT_START---
-[Generate the entire HTML structure exactly as specified in the HTML template above. CRITICAL: the FAQ JSON-LD schema at the end MUST be inside <script type="application/ld+json">...</script> tags! Output the RAW HTML directly without using ```html markdown tags!]
+[Raw HTML article body only]
 ---CONTENT_END---
 
 ---RECIPE_DATA_START---
-[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. CRITICAL: Provide ONLY raw JSON text. DO NOT wrap the JSON in ```json or any other markdown formatting.]
+[Raw JSON object only, no markdown fences]
 ---RECIPE_DATA_END---
 """
 
@@ -256,3 +219,6 @@ Exclusions:
 - No cluttered or messy backgrounds"""
 
     return prompt
+
+
+

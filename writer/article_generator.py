@@ -1,5 +1,5 @@
 """
-Article Generator — Uses Gemini to write SEO-optimized articles
+Article Generator  Uses Gemini to write SEO-optimized articles
 from source material gathered by the source fetcher.
 """
 import logging
@@ -18,6 +18,20 @@ from writer.seo_prompt import build_article_prompt
 from gemini_client import generate_content_with_fallback
 
 logger = logging.getLogger(__name__)
+
+def _infer_intent(topic):
+    """Infer content intent for better prompt shaping."""
+    txt = f"{topic.get('topic', '')} {topic.get('matched_keyword', '')}".lower()
+
+    if any(k in txt for k in ["recipe", "how to", "homemade", "ingredients", "make "]):
+        return "recipe"
+    if any(k in txt for k in ["where to buy", "buy", "price", "availability", "store", "amazon"]):
+        return "buyer"
+    if any(k in txt for k in ["ban", "recall", "news", "update", "lawsuit"]):
+        return "news"
+    if any(k in txt for k in ["trend", "rising", "viral", "tiktok", "spike"]):
+        return "trend"
+    return "explainer"
 
 
 def _search_news_for_trend(keyword):
@@ -66,7 +80,7 @@ def generate_article(topic, source_urls=None):
     """
     Generate a complete SEO-optimized article for a trending topic.
     """
-    logger.info(f"📝 Generating article for: {topic.get('topic', 'Unknown')}")
+    logger.info(f" Generating article for: {topic.get('topic', 'Unknown')}")
 
     # Step 1: Gather source material
     if source_urls is None:
@@ -92,17 +106,17 @@ def generate_article(topic, source_urls=None):
 
     if is_pure_trend:
         keyword = topic.get("matched_keyword") or topic.get("topic", "").replace("Rising search:", "").strip()
-        logger.info(f"  🔍 Pure trend detected. Searching active news for: '{keyword}'")
+        logger.info(f"   Pure trend detected. Searching active news for: '{keyword}'")
         found_urls = _search_news_for_trend(keyword)
         if found_urls:
             source_urls.extend(found_urls)
-            logger.info(f"  ✅ Found {len(found_urls)} background articles for context.")
+            logger.info(f"   Found {len(found_urls)} background articles for context.")
 
     logger.info(f"  Fetching {len(source_urls)} source URLs...")
     source_texts = fetch_multiple_sources(source_urls, max_sources=8)
 
     if not source_texts:
-        logger.warning("  ⚠️ No source material could be extracted. Using topic summary only.")
+        logger.warning("   No source material could be extracted. Using topic summary only.")
         source_texts = [{
             "title": topic.get("topic", ""),
             "text": "\n".join(s.get("summary", "") for s in topic.get("stories", [])),
@@ -111,24 +125,26 @@ def generate_article(topic, source_urls=None):
         }]
 
     # Step 2: Build the prompt
+    intent = _infer_intent(topic)
     prompt = build_article_prompt(
         topic_title=topic.get("topic", "Food & Recipe Update"),
         source_texts=source_texts,
-        matched_keyword=topic.get("matched_keyword", "")
+        matched_keyword=topic.get("matched_keyword", ""),
+        intent=intent
     )
 
     # Step 3: Call Gemini
     try:
-        logger.info("  🤖 Calling Gemini API...")
+        logger.info("   Calling Gemini API...")
         response = generate_content_with_fallback(
             model=config.GEMINI_MODEL,
             contents=prompt
         )
         raw_output = response.text
-        logger.info(f"  ✅ Gemini responded ({len(raw_output)} chars)")
+        logger.info(f"   Gemini responded ({len(raw_output)} chars)")
 
     except Exception as e:
-        logger.error(f"  ❌ Gemini API error: {e}")
+        logger.error(f"   Gemini API error: {e}")
         return None
 
     # Step 4: Parse structured output
@@ -137,9 +153,9 @@ def generate_article(topic, source_urls=None):
     if article:
         article["sources_used"] = [s.get("source_domain", "") for s in source_texts]
         article["word_count"] = len(article.get("content", "").split())
-        logger.info(f"  ✅ Article generated: '{article['title']}' ({article['word_count']} words)")
+        logger.info(f"   Article generated: '{article['title']}' ({article['word_count']} words)")
     else:
-        logger.error("  ❌ Failed to parse Gemini output")
+        logger.error("   Failed to parse Gemini output")
 
     return article
 
@@ -278,9 +294,9 @@ def _parse_article_output(raw_text):
                 if isinstance(recipe_data, dict) and recipe_data:
                     # Filter out empty fields if desired, but here we just attach it
                     result["acf_fields"] = recipe_data
-                    logger.info(f"  ✅ Parsed ACF recipe fields: {list(recipe_data.keys())}")
+                    logger.info(f"   Parsed ACF recipe fields: {list(recipe_data.keys())}")
             except Exception as e:
-                logger.warning(f"  ⚠️ Failed to parse RECIPE_DATA JSON: {e}")
+                logger.warning(f"   Failed to parse RECIPE_DATA JSON: {e}")
 
         # Validate essential fields
         if not result["title"] or not result["content"]:
@@ -297,3 +313,6 @@ def _parse_article_output(raw_text):
     except Exception as e:
         logger.error(f"Parse error: {e}")
         return None
+
+
+

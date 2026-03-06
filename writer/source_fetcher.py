@@ -1,11 +1,12 @@
 """
-Source Fetcher — Downloads and extracts clean text from news/blog article URLs.
+Source Fetcher - Downloads and extracts clean text from news/blog article URLs.
 Used to gather factual information before generating AI articles.
 """
 import logging
 import re
-import requests
 from urllib.parse import urlparse
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,16 @@ BLOCKED_DOMAINS = {
     "google.com",
     "youtube.com",
     "www.youtube.com",
+}
+
+TRUSTED_DOMAIN_HINTS = {
+    "reuters.com", "apnews.com", "bbc.com", "nytimes.com", "theguardian.com",
+    "washingtonpost.com", "forbes.com", "cnbc.com", "fda.gov", "efsa.europa.eu",
+    "usda.gov", "who.int",
+}
+
+LOW_QUALITY_DOMAIN_HINTS = {
+    "pinterest.", "tumblr.", "blogspot.", "medium.com", "quora.com", "reddit.com",
 }
 
 HEADERS = {
@@ -35,12 +46,12 @@ def fetch_article_text(url, max_chars=3000):
     domain = urlparse(url).netloc.replace("www.", "")
 
     if domain in BLOCKED_DOMAINS or urlparse(url).netloc in BLOCKED_DOMAINS:
-        logger.debug(f"  ⏭️ Skipping blocked domain: {domain}")
+        logger.debug(f"  Skipping blocked domain: {domain}")
         return None
 
-    # Try trafilatura first
     try:
         import trafilatura
+
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
             text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
@@ -60,7 +71,6 @@ def fetch_article_text(url, max_chars=3000):
     except Exception as e:
         logger.warning(f"trafilatura failed for {url}: {e}")
 
-    # Fallback: basic requests + regex extraction
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
         response.raise_for_status()
@@ -96,19 +106,46 @@ def fetch_article_text(url, max_chars=3000):
     return None
 
 
+def _source_quality_score(url):
+    """Score source URL quality for ranking extraction order."""
+    try:
+        domain = urlparse(url).netloc.replace("www.", "").lower()
+    except Exception:
+        return 0
+
+    score = 0
+    if any(h in domain for h in TRUSTED_DOMAIN_HINTS):
+        score += 4
+    if any(h in domain for h in LOW_QUALITY_DOMAIN_HINTS):
+        score -= 3
+    if domain.endswith(".gov") or domain.endswith(".edu"):
+        score += 2
+    return score
+
+
 def fetch_multiple_sources(urls, max_sources=5):
     """Fetch text from multiple source URLs."""
     sources = []
 
-    for url in urls[:max_sources]:
+    seen_urls = set()
+    ranked_urls = []
+    for idx, url in enumerate(urls):
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        ranked_urls.append((_source_quality_score(url), -idx, url))
+
+    ranked_urls.sort(reverse=True)
+
+    for _, _, url in ranked_urls[:max_sources]:
         try:
             result = fetch_article_text(url)
             if result:
                 sources.append(result)
-                logger.info(f"  ✅ Extracted {len(result['text'])} chars from {result['source_domain']}")
+                logger.info(f"  Extracted {len(result['text'])} chars from {result['source_domain']}")
             else:
-                logger.warning(f"  ⚠️ Could not extract from: {url[:80]}")
+                logger.warning(f"  Could not extract from: {url[:80]}")
         except Exception as e:
-            logger.error(f"  ❌ Error fetching {url[:80]}: {e}")
+            logger.error(f"  Error fetching {url[:80]}: {e}")
 
     return sources
