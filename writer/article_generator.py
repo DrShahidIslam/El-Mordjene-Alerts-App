@@ -262,6 +262,16 @@ def _parse_article_output(raw_text):
         result["acf_fields"] = {}
         if recipe_match:
             recipe_json_str = recipe_match.group(1).strip()
+            
+            # 1. Clean up potential markdown formatting around the JSON
+            if recipe_json_str.startswith("```json"):
+                recipe_json_str = recipe_json_str[7:].strip()
+            elif recipe_json_str.startswith("```"):
+                recipe_json_str = recipe_json_str[3:].strip()
+                
+            if recipe_json_str.endswith("```"):
+                recipe_json_str = recipe_json_str[:-3].strip()
+
             # Try to parse it
             try:
                 recipe_data = json.loads(recipe_json_str)

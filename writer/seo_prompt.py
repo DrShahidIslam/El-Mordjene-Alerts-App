@@ -215,7 +215,7 @@ TITLE: [your title]
 META_DESCRIPTION: [your meta description]
 SLUG: [your-slug]
 TAGS: [tag1, tag2, tag3, ...]
-CATEGORY: Recipes
+CATEGORY: [Choose the most appropriate single category: Recipes OR Food News OR Trends OR Sweets]
 LANGUAGE: [en or fr]
 
 ---CONTENT_START---
@@ -223,7 +223,7 @@ LANGUAGE: [en or fr]
 ---CONTENT_END---
 
 ---RECIPE_DATA_START---
-[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. No extra formatting or markdown around the JSON.]
+[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. CRITICAL: Provide ONLY raw JSON text. DO NOT wrap the JSON in ```json or any other markdown formatting.]
 ---RECIPE_DATA_END---
 """
 
