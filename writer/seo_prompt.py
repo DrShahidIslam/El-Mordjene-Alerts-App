@@ -1,4 +1,4 @@
-﻿"""
+"""
 SEO Prompt Template - Master prompt for Gemini article generation.
 Tailored for el-mordjene.info: food, recipes, chocolate, desserts, spreads.
 """
@@ -22,9 +22,6 @@ INTERNAL_LINKS = {
     "american_snacks_banned": {"url": "https://el-mordjene.info/american-snacks-banned-in-europe/", "anchor": "American snacks banned in Europe"},
     "tiktok": {"url": "https://el-mordjene.info/el-mordjene-tiktok/", "anchor": "El Mordjene on TikTok"},
 }
-
-
-
 
 
 def _pick_layout_variant(topic_title, matched_keyword):
@@ -74,6 +71,8 @@ def _pick_layout_variant(topic_title, matched_keyword):
     seed = f"{topic_title}|{matched_keyword}".strip().lower()
     idx = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % len(variants)
     return variants[idx]
+
+
 def _intent_guidance(intent):
     intent_map = {
         "recipe": "Focus on clear steps, ingredient substitutions, and practical tips. Keep claims concrete.",
@@ -134,6 +133,8 @@ INTENT GUIDANCE:
 
 STYLE REQUIREMENTS:
 - Output clean HTML only for the article body.
+- Do not use <h1> anywhere in the article body. WordPress title is already the only H1.
+- Start visible section headings at <h2> and use <h3> only for subsections.
 - Use natural heading hierarchy with varied section names.
 - Keep paragraphs short and readable.
 - Include one key-takeaways box and one practical tip box.
@@ -154,14 +155,15 @@ Allowed internal links:
 {links_suggestion}
 
 RECIPE DATA REQUIREMENTS:
-If this is a real recipe article, output a strict JSON object. If not, output {{}}.
+If this is a real recipe article, output a strict JSON object with all recipe fields filled as completely as possible from the article and source material. If not, output {{}}.
+For recipe articles, do not leave ingredients or instructions empty.
 Required JSON fields:
 - recipe_name (string)
 - recipe_description (string)
 - recipe_yield (string)
 - prep_time_minutes (number)
 - cook_time_minutes (number)
-- total_time_minutes (string, optional)
+- total_time_minutes (number or empty string)
 - ingredients (string, one ingredient per line)
 - instructions (string, one step per line)
 - recipe_image (string, keep empty)
@@ -219,6 +221,3 @@ Exclusions:
 - No cluttered or messy backgrounds"""
 
     return prompt
-
-
-
