@@ -423,6 +423,83 @@ def _build_generation_checks(article, primary_keyword):
     return checks
 
 
+def _content_to_line_text(content):
+    if not content:
+        return ""
+    text = re.sub(r'(?i)<br\s*/?>', "\n", content)
+    text = re.sub(r'(?i)</(p|div|li|ul|ol|h2|h3|h4|h5|h6|section)>', "\n", text)
+    text = re.sub(r'(?i)<li[^>]*>', "- ", text)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = text.replace('&nbsp;', ' ')
+    text = re.sub(r'\r\n?', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def _extract_named_section(text, section_names, stop_names):
+    if not text:
+        return ""
+    start_pattern = "|".join(re.escape(name) for name in section_names)
+    stop_pattern = "|".join(re.escape(name) for name in stop_names)
+    pattern = rf'(?ims)^(?:{start_pattern})\s*:?\s*\n(.+?)(?=^(?:{stop_pattern})\s*:?[ \t]*$|\Z)'
+    match = re.search(pattern, text)
+    return match.group(1).strip() if match else ""
+
+
+def _normalize_recipe_lines(section_text):
+    if not section_text:
+        return ""
+    lines = []
+    for raw_line in section_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r'^(?:[-*•]+|\d+[\.)])\s*', '', line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _extract_recipe_description(content):
+    plain = _strip_html_tags(content)
+    if not plain:
+        return ""
+    sentences = re.split(r'(?<=[.!?])\s+', plain)
+    return " ".join(sentence.strip() for sentence in sentences[:2] if sentence.strip())[:300].strip()
+
+
+def _extract_recipe_fields_from_article(article):
+    content = article.get('content', '')
+    text = _content_to_line_text(content)
+    ingredients_block = _extract_named_section(
+        text,
+        ['Ingredients'],
+        ['Equipment', 'Instructions', 'Method', 'Directions', 'Practical Tips', 'Outlook', 'Frequently Asked Questions', 'FAQ', 'Post Tags'],
+    )
+    instructions_block = _extract_named_section(
+        text,
+        ['Instructions', 'Method', 'Directions'],
+        ['Practical Tips', 'Outlook', 'Enjoy', 'Frequently Asked Questions', 'FAQ', 'Post Tags'],
+    )
+
+    ingredients = _normalize_recipe_lines(ingredients_block)
+    instructions = _normalize_recipe_lines(instructions_block)
+    if not ingredients or not instructions:
+        return {}
+
+    recipe_name = article.get('title', '').strip()
+    fallback = {
+        'recipe_name': recipe_name,
+        'recipe_description': _extract_recipe_description(content),
+        'ingredients': ingredients,
+        'instructions': instructions,
+        'recipe_keywords': ", ".join(article.get('tags', [])) if article.get('tags') else article.get('slug', '').replace('-', ', '),
+        'recipecategory': 'Dessert',
+        'recipecuisine': 'International',
+    }
+    return _normalize_recipe_fields(fallback)
+
+
 def _parse_article_output(raw_text, intent=None):
     """Parse the structured output from Gemini into article components."""
     try:
@@ -495,6 +572,14 @@ def _parse_article_output(raw_text, intent=None):
             fallback_fields = _extract_recipe_fields_via_fallback(result)
             if fallback_fields:
                 result["acf_fields"] = fallback_fields
+
+        if _is_recipe_article(result, intent=intent) and not _recipe_fields_complete(result["acf_fields"]):
+            deterministic_fields = _extract_recipe_fields_from_article(result)
+            if deterministic_fields:
+                logger.info("   Recovered recipe ACF fields from article body structure")
+                merged_fields = dict(result.get("acf_fields", {}))
+                merged_fields.update(deterministic_fields)
+                result["acf_fields"] = merged_fields
 
         return result
 
@@ -587,5 +672,8 @@ def generate_article(topic, source_urls=None):
         logger.error("   Failed to parse Gemini output")
 
     return article
+
+
+
 
 
