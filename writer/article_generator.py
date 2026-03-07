@@ -454,7 +454,7 @@ def _normalize_recipe_lines(section_text):
         line = raw_line.strip()
         if not line:
             continue
-        line = re.sub(r'^(?:[-*•]+|\d+[\.)])\s*', '', line).strip()
+        line = re.sub("^(?:[-*\\u2022]+|\\d+[\\.)])\\s*", '', line).strip()
         if line:
             lines.append(line)
     return "\n".join(lines)
