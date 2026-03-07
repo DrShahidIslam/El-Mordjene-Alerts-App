@@ -162,42 +162,51 @@ def generate_article(topic, source_urls=None):
 
 def _extract_faqpage_json(text):
     """Extract raw FAQPage JSON-LD from text using brace matching."""
-    for start_marker in ('{"@context"', '{ "@context"', "{'@context'"):
-        start = text.find(start_marker)
-        if start == -1:
-            continue
-        depth = 0
-        in_string = False
-        escape = False
-        quote = None
-        i = start
-        while i < len(text):
-            c = text[i]
-            if escape:
-                escape = False
-                i += 1
-                continue
-            if c == '\\' and in_string:
-                escape = True
-                i += 1
-                continue
-            if in_string:
-                if c == quote:
-                    in_string = False
-                i += 1
-                continue
-            if c in ('"', "'"):
-                in_string = True
-                quote = c
-                i += 1
-                continue
-            if c == '{':
-                depth += 1
-            elif c == '}':
-                depth -= 1
-                if depth == 0:
-                    return text[start:i + 1].strip()
+    # First see if it's inside a script tag
+    script_match = re.search(r'<script\s+type=["\']application/ld\+json["\']\s*>(.*?)</script>', text, flags=re.DOTALL | re.IGNORECASE)
+    if script_match:
+        json_str = script_match.group(1).strip()
+        if '"FAQPage"' in json_str or "'FAQPage'" in json_str:
+            return json_str
+
+    # Fallback to brace matching, but account for whitespaces
+    match = re.search(r'\{\s*["\']@context["\']', text)
+    if not match:
+        return None
+        
+    start = match.start()
+    depth = 0
+    in_string = False
+    escape = False
+    quote = None
+    i = start
+    while i < len(text):
+        c = text[i]
+        if escape:
+            escape = False
             i += 1
+            continue
+        if c == '\\' and in_string:
+            escape = True
+            i += 1
+            continue
+        if in_string:
+            if c == quote:
+                in_string = False
+            i += 1
+            continue
+        if c in ('"', "'"):
+            in_string = True
+            quote = c
+            i += 1
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1].strip()
+        i += 1
     return None
 
 

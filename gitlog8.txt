@@ -1,0 +1,1734 @@
+﻿commit 188b5504f9904b12f14ded81d9da0f8511882859
+Author: = <=>
+Date:   Fri Mar 6 16:04:25 2026 +0500
+
+    Cleanup temp test files and finalize code after successful testing
+
+diff --git a/database/db.py b/database/db.py
+index 5310c2d..b0cde18 100644
+--- a/database/db.py
++++ b/database/db.py
+@@ -253,3 +253,20 @@ def cleanup_old_data(conn, days=7):
+     conn.execute("DELETE FROM notifications_sent WHERE sent_at < ?", (old_cutoff.isoformat(),))
+     conn.execute("DELETE FROM topic_cache WHERE recorded_at < ?", (old_cutoff.isoformat(),))
+     conn.commit()
++
++def count_published_topics(conn, days=30):
++    """Count published topics in the last N days."""
++    row = conn.execute(
++        "SELECT COUNT(*) AS cnt FROM published_topics WHERE published_at >= datetime('now', ?)",
++        (f"-{int(days)} days",)
++    ).fetchone()
++    return int(row["cnt"]) if row and row["cnt"] is not None else 0
++
++
++def get_recent_published_topics(conn, limit=100):
++    """Return recent published topics as (title, keywords, published_at)."""
++    rows = conn.execute(
++        "SELECT title, keywords, published_at FROM published_topics ORDER BY published_at DESC LIMIT ?",
++        (int(limit),)
++    ).fetchall()
++    return [(r["title"] or "", r["keywords"] or "", r["published_at"] or "") for r in rows]
+diff --git a/main.py b/main.py
+index d8850cc..c8e8d32 100644
+--- a/main.py
++++ b/main.py
+@@ -1,6 +1,6 @@
+ """
+-El-Mordjene News Agent ΓÇö Main orchestrator.
+-Complete pipeline: Sources ΓåÆ Detection ΓåÆ Writer ΓåÆ Publisher ΓåÆ Notifications.
++El-Mordjene News Agent  Main orchestrator.
++Complete pipeline: Sources  Detection  Writer  Publisher  Notifications.
+ 
+ Usage:
+     python main.py              # Continuous loop (scan every SCAN_INTERVAL_MINUTES)
+@@ -25,7 +25,7 @@ import config
+ from database.db import (
+     get_connection, cleanup_old_data, save_topic_to_cache,
+     get_topic_from_cache, record_notification, mark_notified,
+-    record_published_topic
++    record_published_topic, count_published_topics, get_recent_published_topics
+ )
+ from sources.rss_monitor import fetch_rss_stories
+ from sources.trends_monitor import fetch_trending_queries
+@@ -33,6 +33,9 @@ from sources.youtube_monitor import fetch_youtube_videos
+ from sources.news_api_monitor import fetch_news_headlines
+ from detection.spike_detector import detect_spikes
+ from writer.article_generator import generate_article
++from writer.review_assistant import (
++    duplicate_risk, build_preapproval_checklist, rankmath_polylang_warnings
++)
+ from publisher.wordpress_client import (
+     create_post, update_post_status, test_wordpress_connection
+ )
+@@ -43,8 +46,7 @@ from notifications.telegram_bot import (
+     send_publish_confirmation, send_generating_status, send_image_preview,
+     send_pending_reminder, get_updates, answer_callback_query, test_connection
+ )
+-
+-# ΓöÇΓöÇ Logging Setup ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++#  Logging Setup 
+ logging.basicConfig(
+     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+@@ -56,7 +58,7 @@ logging.basicConfig(
+ )
+ logger = logging.getLogger("agent")
+ 
+-# ΓöÇΓöÇ Global State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++#  Global State 
+ STATE_FILE = os.path.join(os.path.dirname(__file__), "agent_state.json")
+ 
+ 
+@@ -75,6 +77,8 @@ def _load_state():
+         "last_scan": None,
+         "scan_count": 0,
+         "total_articles": 0,
++        "generated_count": 0,
++        "generated_words_total": 0,
+         "telegram_offset": None,
+     }
+ 
+@@ -88,22 +92,22 @@ def _save_state(state):
+         logger.error(f"Failed to save state: {e}")
+ 
+ 
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ #                         SCAN PIPELINE
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ 
+ def run_scan(state):
+-    """Execute the full scan ΓåÆ detect ΓåÆ alert pipeline."""
++    """Execute the full scan  detect  alert pipeline."""
+     logger.info("=" * 60)
+-    logger.info("≡ƒöì Starting scan cycle...")
++    logger.info(" Starting scan cycle...")
+     logger.info("=" * 60)
+ 
+     conn = get_connection()
+     cleanup_old_data(conn)
+     conn.close()
+ 
+-    # ΓöÇΓöÇ Step 1: Collect from all sources ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    logger.info("≡ƒôí Phase 1: Collecting from sources...")
++    #  Step 1: Collect from all sources 
++    logger.info(" Phase 1: Collecting from sources...")
+     all_stories = []
+     trends_data = []
+ 
+@@ -139,7 +143,7 @@ def run_scan(state):
+     except Exception as e:
+         logger.error(f"  Trends error: {e}")
+ 
+-    logger.info(f"≡ƒôè Total raw stories: {len(all_stories)}")
++    logger.info(f" Total raw stories: {len(all_stories)}")
+ 
+     if not all_stories and not trends_data:
+         logger.info("No stories or trends found this cycle.")
+@@ -147,16 +151,17 @@ def run_scan(state):
+         state["scan_count"] = state.get("scan_count", 0) + 1
+         return []
+ 
+-    # ΓöÇΓöÇ Step 2: Detect spikes ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+-    logger.info("≡ƒöÄ Phase 2: Detecting spikes...")
++    #  Step 2: Detect spikes 
++    logger.info(" Phase 2: Detecting spikes...")
+     trending_topics = detect_spikes(all_stories, trends_data)
+-    logger.info(f"≡ƒöÑ Found {len(trending_topics)} trending topics")
++    logger.info(f" Found {len(trending_topics)} trending topics")
+ 
+-    # ΓöÇΓöÇ Step 3: Send alerts ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Step 3: Send alerts 
+     if trending_topics:
+-        logger.info("≡ƒôó Phase 3: Sending Telegram alerts...")
++        logger.info(" Phase 3: Sending Telegram alerts...")
+         conn = get_connection()
+-        for topic in trending_topics[:5]:
++        max_topics = int(getattr(config, "MAX_ALERT_TOPICS_PER_SCAN", 3))
++        for topic in trending_topics[:max_topics]:
+             # Cache topic for later article generation
+             story_hash = None
+             for s in topic.get("stories", []):
+@@ -175,9 +180,9 @@ def run_scan(state):
+             if msg_id:
+                 record_notification(conn, story_hash, msg_id)
+                 mark_notified(conn, story_hash)
+-                logger.info(f"  Γ£à Alert sent: {topic['topic'][:60]}")
++                logger.info(f"   Alert sent: {topic['topic'][:60]}")
+             else:
+-                logger.warning(f"  ΓÜá∩╕Å Alert failed: {topic['topic'][:60]}")
++                logger.warning(f"   Alert failed: {topic['topic'][:60]}")
+ 
+         conn.close()
+     else:
+@@ -189,13 +194,13 @@ def run_scan(state):
+     return trending_topics
+ 
+ 
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ #                      COMMAND HANDLING
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ 
+ def poll_telegram_commands(state, timeout_seconds=60):
+     """Poll Telegram for button presses and text commands."""
+-    logger.info(f"≡ƒôí Listening for Telegram commands ({timeout_seconds}s)...")
++    logger.info(f" Listening for Telegram commands ({timeout_seconds}s)...")
+     start_time = time.time()
+     offset = state.get("telegram_offset")
+ 
+@@ -220,10 +225,12 @@ def poll_telegram_commands(state, timeout_seconds=60):
+                 if text.startswith("/status"):
+                     _handle_status_command(state)
+                 elif text.startswith("/scan"):
+-                    send_simple_message("≡ƒöì Starting manual scan...")
++                    send_simple_message(" Starting manual scan...")
+                     run_scan(state)
+                 elif text.startswith("/help"):
+                     _handle_help_command()
++                elif text.startswith("/refresh"):
++                    _handle_refresh_command()
+ 
+         except Exception as e:
+             logger.error(f"Telegram polling error: {e}")
+@@ -243,67 +250,65 @@ def _handle_callback(callback, state):
+     # Acknowledge the callback
+     answer_callback_query(callback_id, "Processing...")
+ 
+-    # ΓöÇΓöÇ Generate Article ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Generate Article 
+     if data.startswith("write_"):
+         _handle_write_article(data, state)
+ 
+-    # ΓöÇΓöÇ Approve (save as draft) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Approve (save as draft) 
+     elif data == "approve":
+         _handle_approve(state, status="draft")
+ 
+-    # ΓöÇΓöÇ Publish Live ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Publish Live 
+     elif data == "publish_live":
+         _handle_approve(state, status="publish")
+ 
+-    # ΓöÇΓöÇ Reject ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Reject 
+     elif data == "reject":
+         state["pending_article"] = None
+         state["pending_topic"] = None
+         state["pending_image_paths"] = None
+         _save_state(state)
+-        send_simple_message("≡ƒùæ∩╕Å Article rejected and cleared.")
++        send_simple_message(" Article rejected and cleared.")
+ 
+-    # ΓöÇΓöÇ Ignore trending alert ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Ignore trending alert 
+     elif data == "ignore":
+-        send_simple_message("≡ƒæì Ignored.")
++        send_simple_message(" Ignored.")
+ 
+-    # ΓöÇΓöÇ Show pending article ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Show pending article 
+     elif data == "show_pending":
+         if state.get("pending_article"):
+             send_article_preview(state["pending_article"])
+         else:
+             send_simple_message("No pending article.")
+ 
+-    # ΓöÇΓöÇ Clear pending ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Clear pending 
+     elif data == "clear_pending":
+         state["pending_article"] = None
+         state["pending_topic"] = None
+         state["pending_image_paths"] = None
+         _save_state(state)
+-        send_simple_message("Γ£à Pending article cleared.")
++        send_simple_message(" Pending article cleared.")
+ 
+-    # ΓöÇΓöÇ Publish draft from Telegram ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++    #  Publish draft from Telegram 
+     elif data.startswith("publish_draft_"):
+         post_id = data.replace("publish_draft_", "")
+         try:
+             post_id = int(post_id)
+             url = update_post_status(post_id, "publish")
+             if url:
+-                send_simple_message(f"≡ƒÜÇ Post published live!\n{url}")
++                send_simple_message(f" Post published live!\n{url}")
+             else:
+-                send_simple_message(f"Γ¥î Failed to publish post {post_id}")
++                send_simple_message(f" Failed to publish post {post_id}")
+         except Exception as e:
+-            send_simple_message(f"Γ¥î Error publishing: {e}")
++            send_simple_message(f" Error publishing: {e}")
+ 
+ 
+ def _handle_write_article(data, state):
+     """Handle the 'Generate Article' button press."""
+-    # Check if there's already a pending article
+     if state.get("pending_article"):
+         send_pending_reminder(state["pending_article"].get("title", "Unknown"))
+         return
+ 
+-    # Find the topic from cache
+     story_hash = data.replace("write_", "").replace("write_article", "")
+ 
+     conn = get_connection()
+@@ -311,33 +316,48 @@ def _handle_write_article(data, state):
+     conn.close()
+ 
+     if not topic:
+-        send_simple_message("ΓÜá∩╕Å Topic data not found. It may have expired. Run a new scan first.")
++        send_simple_message(" Topic data not found. It may have expired. Run a new scan first.")
+         return
+ 
+-    # Send generating status
++    # Cannibalization guard (warning-only)
++    conn = get_connection()
++    try:
++        is_dup, dup_msg = duplicate_risk(conn, topic.get("topic", ""), threshold=0.35)
++    finally:
++        conn.close()
++
++    if is_dup:
++        send_simple_message(
++            " Duplicate-risk warning:\n"
++            + dup_msg
++            + "\nConsider refreshing the old page instead of publishing a new URL."
++        )
++
+     send_generating_status(topic.get("topic", "Unknown topic"))
+ 
+-    # Generate the article
+     try:
+         article = generate_article(topic)
+     except Exception as e:
+         logger.error(f"Article generation error: {e}")
+-        send_simple_message(f"Γ¥î Article generation failed: {str(e)[:200]}")
++        send_simple_message(f" Article generation failed: {str(e)[:200]}")
+         return
+ 
+     if not article:
+-        send_simple_message("Γ¥î Article generation failed. Check logs for details.")
++        send_simple_message(" Article generation failed. Check logs for details.")
+         return
+ 
+     article["matched_keyword"] = topic.get("matched_keyword", "")
+ 
+-    # Generate featured image
++    # Status dashboard stats
++    state["generated_count"] = int(state.get("generated_count", 0)) + 1
++    state["generated_words_total"] = int(state.get("generated_words_total", 0)) + int(article.get("word_count", 0))
++
++    checklist = build_preapproval_checklist(article, topic, duplicate_warning=(dup_msg if is_dup else None))
++    send_simple_message(" " + checklist)
++
+     try:
+         source_url = topic.get("top_url", "")
+-        webp_path, jpg_path = generate_featured_image(
+-            article["title"],
+-            source_url=source_url
+-        )
++        webp_path, jpg_path = generate_featured_image(article["title"], source_url=source_url)
+         if webp_path and jpg_path:
+             state["pending_image_paths"] = {"webp": webp_path, "jpg": jpg_path}
+             send_image_preview(jpg_path, article["title"])
+@@ -347,12 +367,9 @@ def _handle_write_article(data, state):
+         logger.warning(f"Image generation failed: {e}")
+         state["pending_image_paths"] = None
+ 
+-    # Save pending article
+     state["pending_article"] = article
+     state["pending_topic"] = topic
+     _save_state(state)
+-
+-    # Send preview
+     send_article_preview(article)
+ 
+ 
+@@ -360,29 +377,30 @@ def _handle_approve(state, status="draft"):
+     """Handle article approval (draft or publish)."""
+     article = state.get("pending_article")
+     if not article:
+-        send_simple_message("ΓÜá∩╕Å No pending article to approve.")
++        send_simple_message(" No pending article to approve.")
+         return
+ 
+-    # Get featured image path
++    consistency_warnings = rankmath_polylang_warnings(article)
++    if consistency_warnings:
++        send_simple_message(" Pre-publish checks:\n- " + "\n- ".join(consistency_warnings[:5]))
++
+     image_path = None
+     image_paths = state.get("pending_image_paths")
+     if image_paths:
+         image_path = image_paths.get("jpg") or image_paths.get("webp")
+ 
+-    # Publish to WordPress
+-    send_simple_message(f"ΓÅ│ Publishing to WordPress as {status}...")
++    send_simple_message(f" Publishing to WordPress as {status}...")
+ 
+     try:
+         result = create_post(article, featured_image_path=image_path, status=status)
+     except Exception as e:
+-        send_simple_message(f"Γ¥î Publish error: {e}")
++        send_simple_message(f" Publish error: {e}")
+         return
+ 
+     if result:
+         post_id = result.get("post_id")
+         post_url = result.get("post_url", "")
+ 
+-        # Record in database
+         conn = get_connection()
+         record_published_topic(
+             conn,
+@@ -392,10 +410,7 @@ def _handle_approve(state, status="draft"):
+         )
+         conn.close()
+ 
+-        send_publish_confirmation(
+-            post_url, article["title"],
+-            post_id=post_id, status=status
+-        )
++        send_publish_confirmation(post_url, article["title"], post_id=post_id, status=status)
+ 
+         state["total_articles"] = state.get("total_articles", 0) + 1
+         state["pending_article"] = None
+@@ -403,79 +418,131 @@ def _handle_approve(state, status="draft"):
+         state["pending_image_paths"] = None
+         _save_state(state)
+ 
+-        logger.info(f"Γ£à Article published: {article['title']} (ID: {post_id})")
++        logger.info(f" Article published: {article['title']} (ID: {post_id})")
+     else:
+         error_msg = wp_client.LAST_PUBLISH_ERROR or "Unknown error"
+-        send_simple_message(f"Γ¥î Publish failed: {error_msg}")
++        send_simple_message(f" Publish failed: {error_msg}")
+ 
+ 
+ def _handle_status_command(state):
+     """Send agent status summary."""
++    generated_count = int(state.get("generated_count", 0))
++    avg_words = int(state.get("generated_words_total", 0) / max(generated_count, 1)) if generated_count else 0
++
++    published_30 = 0
++    top_keywords = []
++    conn = get_connection()
++    try:
++        published_30 = count_published_topics(conn, days=30)
++        recent = get_recent_published_topics(conn, limit=100)
++        kw_counts = {}
++        for _, kws, _ in recent:
++            for kw in [k.strip().lower() for k in (kws or "").split(",") if k.strip()]:
++                kw_counts[kw] = kw_counts.get(kw, 0) + 1
++        top_keywords = sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:5]
++    finally:
++        conn.close()
++
+     lines = [
+-        f"≡ƒôè Scans completed: {state.get('scan_count', 0)}",
+-        f"≡ƒô¥ Articles published: {state.get('total_articles', 0)}",
+-        f"≡ƒòÉ Last scan: {state.get('last_scan', 'Never')}",
+-        f"≡ƒôî Pending article: {'Yes' if state.get('pending_article') else 'No'}",
++        f" Scans completed: {state.get('scan_count', 0)}",
++        f" Articles published (all-time): {state.get('total_articles', 0)}",
++        f" Published last 30 days: {published_30}",
++        f" Drafts generated: {generated_count}",
++        f" Avg generated words: {avg_words if avg_words else 'N/A'}",
++        f" Last scan: {state.get('last_scan', 'Never')}",
++        f" Pending article: {'Yes' if state.get('pending_article') else 'No'}",
+     ]
++
+     if state.get("pending_article"):
+         lines.append(f"   Title: {state['pending_article'].get('title', 'Unknown')}")
++
++    if top_keywords:
++        lines.append(" Top repeated keywords (recent):")
++        for kw, cnt in top_keywords:
++            lines.append(f"   - {kw}: {cnt}")
++
++    send_simple_message("\n".join(lines))
++
++
++def _handle_refresh_command():
++    """Show refresh candidates based on older published topics."""
++    conn = get_connection()
++    try:
++        recent = get_recent_published_topics(conn, limit=40)
++    finally:
++        conn.close()
++
++    if not recent:
++        send_simple_message("No published topics found yet for refresh suggestions.")
++        return
++
++    # Suggest older entries first for refresh mode.
++    tail = list(reversed(recent))[:5]
++    lines = [" Refresh suggestions (older published topics):"]
++    for title, keywords, published_at in tail:
++        lines.append(f"- {published_at[:10]} | {title[:80]}")
++        if keywords:
++            lines.append(f"  tags: {keywords[:80]}")
++
++    lines.append("Tip: when a new alert is similar to one above, update old URL instead of publishing a new page.")
+     send_simple_message("\n".join(lines))
+ 
+ 
+ def _handle_help_command():
+     """Send help message."""
+-    help_text = """≡ƒñû El-Mordjene Agent Commands:
++    help_text = """ El-Mordjene Agent Commands:
+ 
+-/status ΓÇö Show agent status
+-/scan ΓÇö Trigger a manual scan
+-/help ΓÇö Show this help message
++/status  Show agent status
++/scan  Trigger a manual scan
++/help  Show this help message
++/refresh  Suggest old posts to refresh
+ 
+ Button actions:
+-Γ£ì∩╕Å Generate Article ΓÇö Create article from trending topic
+-Γ£à Approve Draft ΓÇö Save as WordPress draft
+-≡ƒÜÇ Publish Live ΓÇö Publish immediately
+-≡ƒöä Regenerate ΓÇö Generate a new version
+-≡ƒùæ∩╕Å Reject ΓÇö Discard the article"""
++ Generate Article  Create article from trending topic
++ Approve Draft  Save as WordPress draft
++ Publish Live  Publish immediately
++ Regenerate  Generate a new version
++ Reject  Discard the article"""
+     send_simple_message(help_text)
+ 
+ 
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ #                         TEST MODE
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ 
+ def test_connections():
+     """Test all API connections."""
+     print("\n" + "=" * 60)
+-    print("≡ƒöº El-Mordjene Agent ΓÇö Connection Test")
++    print(" El-Mordjene Agent  Connection Test")
+     print("=" * 60)
+ 
+     results = {}
+ 
+     # Telegram
+-    print("\n1∩╕ÅΓâú  Telegram Bot...")
++    print("\n1  Telegram Bot...")
+     ok, name = test_connection()
+     results["telegram"] = ok
+     if ok:
+-        print(f"   Γ£à Connected: @{name}")
+-        mid = send_simple_message("≡ƒñû El-Mordjene Agent connection test. All systems go!")
++        print(f"    Connected: @{name}")
++        mid = send_simple_message(" El-Mordjene Agent connection test. All systems go!")
+         if mid:
+-            print(f"   Γ£à Test message sent (ID: {mid})")
++            print(f"    Test message sent (ID: {mid})")
+         else:
+-            print("   ΓÜá∩╕Å  Connected but couldn't send message. Check TELEGRAM_CHAT_ID.")
++            print("     Connected but couldn't send message. Check TELEGRAM_CHAT_ID.")
+     else:
+-        print("   Γ¥î Failed. Check TELEGRAM_BOT_TOKEN.")
++        print("    Failed. Check TELEGRAM_BOT_TOKEN.")
+ 
+     # WordPress
+-    print("\n2∩╕ÅΓâú  WordPress...")
++    print("\n2  WordPress...")
+     ok = test_wordpress_connection()
+     results["wordpress"] = ok
+     if ok:
+-        print("   Γ£à Connected")
++        print("    Connected")
+     else:
+-        print("   Γ¥î Failed. Check WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD.")
++        print("    Failed. Check WP_BASE_URL, WP_USERNAME, WP_APP_PASSWORD.")
+ 
+     # Gemini
+-    print("\n3∩╕ÅΓâú  Gemini API...")
++    print("\n3  Gemini API...")
+     try:
+         from gemini_client import generate_content_with_fallback
+         response = generate_content_with_fallback(
+@@ -483,53 +550,53 @@ def test_connections():
+             contents="Reply with exactly: CONNECTED"
+         )
+         if "CONNECTED" in response.text.upper():
+-            print(f"   Γ£à Connected (model: {config.GEMINI_MODEL})")
++            print(f"    Connected (model: {config.GEMINI_MODEL})")
+             results["gemini"] = True
+         else:
+-            print(f"   Γ£à Connected but unexpected response")
++            print(f"    Connected but unexpected response")
+             results["gemini"] = True
+     except Exception as e:
+-        print(f"   Γ¥î Failed: {e}")
++        print(f"    Failed: {e}")
+         results["gemini"] = False
+ 
+     # RSS Feeds
+-    print("\n4∩╕ÅΓâú  RSS Feeds...")
++    print("\n4  RSS Feeds...")
+     try:
+         stories = fetch_rss_stories()
+-        print(f"   Γ£à Fetched {len(stories)} stories from {len(config.RSS_FEEDS)} feeds")
++        print(f"    Fetched {len(stories)} stories from {len(config.RSS_FEEDS)} feeds")
+         results["rss"] = True
+         if stories:
+-            print(f"   ≡ƒô░ Sample: {stories[0]['title'][:80]}")
++            print(f"    Sample: {stories[0]['title'][:80]}")
+     except Exception as e:
+-        print(f"   Γ¥î Failed: {e}")
++        print(f"    Failed: {e}")
+         results["rss"] = False
+ 
+     # YouTube (optional)
+-    print("\n5∩╕ÅΓâú  YouTube API...")
++    print("\n5  YouTube API...")
+     if config.YOUTUBE_API_KEY:
+         try:
+             videos = fetch_youtube_videos()
+-            print(f"   Γ£à Found {len(videos)} videos")
++            print(f"    Found {len(videos)} videos")
+             results["youtube"] = True
+         except Exception as e:
+-            print(f"   Γ¥î Failed: {e}")
++            print(f"    Failed: {e}")
+             results["youtube"] = False
+     else:
+-        print("   ΓÅ¡∩╕Å  Skipped (no YOUTUBE_API_KEY configured)")
++        print("     Skipped (no YOUTUBE_API_KEY configured)")
+         results["youtube"] = None
+ 
+     # NewsAPI (optional)
+-    print("\n6∩╕ÅΓâú  NewsAPI...")
++    print("\n6  NewsAPI...")
+     if config.NEWS_API_KEY:
+         try:
+             headlines = fetch_news_headlines()
+-            print(f"   Γ£à Found {len(headlines)} headlines")
++            print(f"    Found {len(headlines)} headlines")
+             results["newsapi"] = True
+         except Exception as e:
+-            print(f"   Γ¥î Failed: {e}")
++            print(f"    Failed: {e}")
+             results["newsapi"] = False
+     else:
+-        print("   ΓÅ¡∩╕Å  Skipped (no NEWS_API_KEY configured)")
++        print("     Skipped (no NEWS_API_KEY configured)")
+         results["newsapi"] = None
+ 
+     # Summary
+@@ -537,19 +604,19 @@ def test_connections():
+     passed = sum(1 for v in results.values() if v is True)
+     failed = sum(1 for v in results.values() if v is False)
+     skipped = sum(1 for v in results.values() if v is None)
+-    print(f"Γ£à {passed} passed | Γ¥î {failed} failed | ΓÅ¡∩╕Å {skipped} skipped")
++    print(f" {passed} passed |  {failed} failed |  {skipped} skipped")
+     print("=" * 60 + "\n")
+ 
+     return failed == 0
+ 
+ 
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ #                           MAIN
+-# ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
++# 
+ 
+ def main():
+     parser = argparse.ArgumentParser(
+-        description="El-Mordjene News Agent ΓÇö Automated food trend detection and article generation"
++        description="El-Mordjene News Agent  Automated food trend detection and article generation"
+     )
+     parser.add_argument("--test", action="store_true", help="Test all API connections")
+     parser.add_argument("--once", action="store_true", help="Single scan cycle (for cron/CI)")
+@@ -582,7 +649,7 @@ def main():
+ 
+     if args.listen:
+         logger.info("Listen-only mode (--listen). No scanning.")
+-        send_simple_message("≡ƒñû El-Mordjene Agent is online (listen mode).")
++        send_simple_message(" El-Mordjene Agent is online (listen mode).")
+         while True:
+             try:
+                 poll_telegram_commands(state, timeout_seconds=300)
+@@ -594,12 +661,12 @@ def main():
+ 
+     # Default: continuous loop
+     logger.info("=" * 60)
+-    logger.info("≡ƒÜÇ El-Mordjene Agent starting (continuous mode)")
++    logger.info(" El-Mordjene Agent starting (continuous mode)")
+     logger.info(f"   Scan interval: {config.SCAN_INTERVAL_MINUTES} minutes")
+     logger.info("=" * 60)
+ 
+     send_simple_message(
+-        f"≡ƒñû El-Mordjene Agent is online!\n"
++        f" El-Mordjene Agent is online!\n"
+         f"Scanning every {config.SCAN_INTERVAL_MINUTES} min.\n"
+         f"Use /help for commands."
+     )
+@@ -611,14 +678,14 @@ def main():
+             _save_state(state)
+ 
+             # Listen for commands until next scan
+-            logger.info(f"ΓÅ░ Next scan in {config.SCAN_INTERVAL_MINUTES} minutes. Listening for commands...")
++            logger.info(f" Next scan in {config.SCAN_INTERVAL_MINUTES} minutes. Listening for commands...")
+             poll_telegram_commands(state, timeout_seconds=config.SCAN_INTERVAL_MINUTES * 60)
+             _save_state(state)
+ 
+         except KeyboardInterrupt:
+             logger.info("Interrupted. Saving state and exiting.")
+             _save_state(state)
+-            send_simple_message("≡ƒñû El-Mordjene Agent shutting down.")
++            send_simple_message(" El-Mordjene Agent shutting down.")
+             break
+         except Exception as e:
+             logger.error(f"Agent loop error: {e}", exc_info=True)
+@@ -627,3 +694,27 @@ def main():
+ 
+ if __name__ == "__main__":
+     main()
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+diff --git a/temp_wp_test.py b/temp_wp_test.py
+deleted file mode 100644
+index 4313e4d..0000000
+--- a/temp_wp_test.py
++++ /dev/null
+@@ -1,58 +0,0 @@
+-import requests
+-import json
+-from requests.auth import HTTPBasicAuth
+-import os
+-import sys
+-
+-# load env manually
+-with open('.env', 'r') as f:
+-    for line in f:
+-        line = line.strip()
+-        if line and not line.startswith('#'):
+-            k, v = line.split('=', 1)
+-            os.environ[k] = v
+-
+-WP_URL = os.environ.get('WP_BASE_URL', 'https://el-mordjene.info')
+-WP_USERNAME = os.environ.get('WP_USERNAME')
+-WP_APP_PASSWORD = os.environ.get('WP_APP_PASSWORD')
+-
+-API_BASE = f"{WP_URL}/wp-json/wp/v2"
+-AUTH = HTTPBasicAuth(WP_USERNAME, WP_APP_PASSWORD)
+-
+-def test_api():
+-    print("Testing new RankMath insertion hook...")
+-    
+-    # We will create a draft post to trigger `rest_insert_post` 
+-    post_data = {
+-        "title": "RankMath Hook Test Post",
+-        "content": "This is a test post to verify RankMath meta via REST API.",
+-        "status": "draft",
+-        "meta": {
+-            "rank_math_title": "Verified RM Title",
+-            "rank_math_focus_keyword": "hook test"
+-        }
+-    }
+-    
+-    res = requests.post(f"{API_BASE}/posts", json=post_data, auth=AUTH)
+-    
+-    if res.status_code in [200, 201]:
+-        data = res.json()
+-        print(f"Γ£à Post created successfully! ID: {data.get('id')}")
+-        
+-        # WP native response might not return 'meta' by default if unregistered
+-        # But we can check if it exists or we can just fetch it again
+-        print("Meta returned by API on creation:", data.get('meta', {}))
+-        
+-        print("\nΓ£à Test passed! The 403 error is completely gone and the post was created successfully.")
+-        print(f"Please check your WordPress Admin dashboard for a new draft post titled 'RankMath Hook Test Post' (ID: {data['id']}).")
+-        print("Open the post and scroll down to the RankMath SEO box. You should see:")
+-        print(" - Focus Keyword: 'hook test'")
+-        print(" - Title: 'Verified RM Title'")
+-
+-    else:
+-        print(f"Γ¥î Post creation failed. Status: {res.status_code}")
+-        print(res.text)
+-
+-test_api()
+-
+-
+diff --git a/test_bot_log_utf8.txt b/test_bot_log_utf8.txt
+deleted file mode 100644
+index 679c0a7..0000000
+--- a/test_bot_log_utf8.txt
++++ /dev/null
+@@ -1,36 +0,0 @@
+-∩╗┐.venv\Scripts\python.exe : DE
+-BUG:urllib3.connectionpool:St
+-arting new HTTPS connection 
+-(1): api.telegram.org:443
+-At line:1 char:1
+-+ .venv\Scripts\python.exe 
+--m 
+-notifications.telegram_bot > 
+-test_bot_log ...
+-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-~~~~~~~~~~~~~
+-    + CategoryInfo           
+-   : NotSpecifi    ed: 
+-(DEBUG:urllib3    
+-.c...elegram.org:4    
+-43:String) [], Rem    
+-oteException
+-    + FullyQualifiedEr    
+-rorId : NativeComm    
+-andError
+- 
+-ERROR:__main__:Telegram 
+-connection test failed: HTTPS
+-ConnectionPool(host='api.tele
+-gram.org', port=443): Max 
+-retries exceeded with url: /b
+-ot8764425447:AAGS0PDUHDk-5aiF
+-UyPnfvAtyuBcuh68gDQ/getMe 
+-(Caused by ConnectTimeoutErro
+-r(<HTTPSConnection(host='api.
+-telegram.org', port=443) at 
+-0x15f0a42c710>, 'Connection 
+-to api.telegram.org timed 
+-out. (connect timeout=10)'))
+-Bot connection failed. Check your TELEGRAM_BOT_TOKEN.
+diff --git a/test_connections_full.txt b/test_connections_full.txt
+new file mode 100644
+index 0000000..80146d9
+Binary files /dev/null and b/test_connections_full.txt differ
+diff --git a/test_out.txt b/test_out.txt
+deleted file mode 100644
+index 9ea7448..0000000
+Binary files a/test_out.txt and /dev/null differ
+diff --git a/test_results.txt b/test_results.txt
+deleted file mode 100644
+index 50cc819..0000000
+Binary files a/test_results.txt and /dev/null differ
+diff --git a/test_rm_output.txt b/test_rm_output.txt
+deleted file mode 100644
+index 6d1f14b..0000000
+Binary files a/test_rm_output.txt and /dev/null differ
+diff --git a/test_rm_output2.txt b/test_rm_output2.txt
+deleted file mode 100644
+index 6d1f14b..0000000
+Binary files a/test_rm_output2.txt and /dev/null differ
+diff --git a/test_rm_output3.txt b/test_rm_output3.txt
+deleted file mode 100644
+index 6d1f14b..0000000
+Binary files a/test_rm_output3.txt and /dev/null differ
+diff --git a/test_rm_output4.txt b/test_rm_output4.txt
+deleted file mode 100644
+index 78af0cc..0000000
+Binary files a/test_rm_output4.txt and /dev/null differ
+diff --git a/writer/article_generator.py b/writer/article_generator.py
+index 0711b68..f124c05 100644
+--- a/writer/article_generator.py
++++ b/writer/article_generator.py
+@@ -1,5 +1,5 @@
+ """
+-Article Generator ΓÇö Uses Gemini to write SEO-optimized articles
++Article Generator  Uses Gemini to write SEO-optimized articles
+ from source material gathered by the source fetcher.
+ """
+ import logging
+@@ -19,6 +19,20 @@ from gemini_client import generate_content_with_fallback
+ 
+ logger = logging.getLogger(__name__)
+ 
++def _infer_intent(topic):
++    """Infer content intent for better prompt shaping."""
++    txt = f"{topic.get('topic', '')} {topic.get('matched_keyword', '')}".lower()
++
++    if any(k in txt for k in ["recipe", "how to", "homemade", "ingredients", "make "]):
++        return "recipe"
++    if any(k in txt for k in ["where to buy", "buy", "price", "availability", "store", "amazon"]):
++        return "buyer"
++    if any(k in txt for k in ["ban", "recall", "news", "update", "lawsuit"]):
++        return "news"
++    if any(k in txt for k in ["trend", "rising", "viral", "tiktok", "spike"]):
++        return "trend"
++    return "explainer"
++
+ 
+ def _search_news_for_trend(keyword):
+     """Search Google News RSS and NewsAPI to find background context for a trending keyword."""
+@@ -66,7 +80,7 @@ def generate_article(topic, source_urls=None):
+     """
+     Generate a complete SEO-optimized article for a trending topic.
+     """
+-    logger.info(f"≡ƒô¥ Generating article for: {topic.get('topic', 'Unknown')}")
++    logger.info(f" Generating article for: {topic.get('topic', 'Unknown')}")
+ 
+     # Step 1: Gather source material
+     if source_urls is None:
+@@ -92,17 +106,17 @@ def generate_article(topic, source_urls=None):
+ 
+     if is_pure_trend:
+         keyword = topic.get("matched_keyword") or topic.get("topic", "").replace("Rising search:", "").strip()
+-        logger.info(f"  ≡ƒöì Pure trend detected. Searching active news for: '{keyword}'")
++        logger.info(f"   Pure trend detected. Searching active news for: '{keyword}'")
+         found_urls = _search_news_for_trend(keyword)
+         if found_urls:
+             source_urls.extend(found_urls)
+-            logger.info(f"  Γ£à Found {len(found_urls)} background articles for context.")
++            logger.info(f"   Found {len(found_urls)} background articles for context.")
+ 
+     logger.info(f"  Fetching {len(source_urls)} source URLs...")
+     source_texts = fetch_multiple_sources(source_urls, max_sources=8)
+ 
+     if not source_texts:
+-        logger.warning("  ΓÜá∩╕Å No source material could be extracted. Using topic summary only.")
++        logger.warning("   No source material could be extracted. Using topic summary only.")
+         source_texts = [{
+             "title": topic.get("topic", ""),
+             "text": "\n".join(s.get("summary", "") for s in topic.get("stories", [])),
+@@ -111,24 +125,26 @@ def generate_article(topic, source_urls=None):
+         }]
+ 
+     # Step 2: Build the prompt
++    intent = _infer_intent(topic)
+     prompt = build_article_prompt(
+         topic_title=topic.get("topic", "Food & Recipe Update"),
+         source_texts=source_texts,
+-        matched_keyword=topic.get("matched_keyword", "")
++        matched_keyword=topic.get("matched_keyword", ""),
++        intent=intent
+     )
+ 
+     # Step 3: Call Gemini
+     try:
+-        logger.info("  ≡ƒñû Calling Gemini API...")
++        logger.info("   Calling Gemini API...")
+         response = generate_content_with_fallback(
+             model=config.GEMINI_MODEL,
+             contents=prompt
+         )
+         raw_output = response.text
+-        logger.info(f"  Γ£à Gemini responded ({len(raw_output)} chars)")
++        logger.info(f"   Gemini responded ({len(raw_output)} chars)")
+ 
+     except Exception as e:
+-        logger.error(f"  Γ¥î Gemini API error: {e}")
++        logger.error(f"   Gemini API error: {e}")
+         return None
+ 
+     # Step 4: Parse structured output
+@@ -137,9 +153,9 @@ def generate_article(topic, source_urls=None):
+     if article:
+         article["sources_used"] = [s.get("source_domain", "") for s in source_texts]
+         article["word_count"] = len(article.get("content", "").split())
+-        logger.info(f"  Γ£à Article generated: '{article['title']}' ({article['word_count']} words)")
++        logger.info(f"   Article generated: '{article['title']}' ({article['word_count']} words)")
+     else:
+-        logger.error("  Γ¥î Failed to parse Gemini output")
++        logger.error("   Failed to parse Gemini output")
+ 
+     return article
+ 
+@@ -278,9 +294,9 @@ def _parse_article_output(raw_text):
+                 if isinstance(recipe_data, dict) and recipe_data:
+                     # Filter out empty fields if desired, but here we just attach it
+                     result["acf_fields"] = recipe_data
+-                    logger.info(f"  Γ£à Parsed ACF recipe fields: {list(recipe_data.keys())}")
++                    logger.info(f"   Parsed ACF recipe fields: {list(recipe_data.keys())}")
+             except Exception as e:
+-                logger.warning(f"  ΓÜá∩╕Å Failed to parse RECIPE_DATA JSON: {e}")
++                logger.warning(f"   Failed to parse RECIPE_DATA JSON: {e}")
+ 
+         # Validate essential fields
+         if not result["title"] or not result["content"]:
+@@ -297,3 +313,6 @@ def _parse_article_output(raw_text):
+     except Exception as e:
+         logger.error(f"Parse error: {e}")
+         return None
++
++
++
+diff --git a/writer/review_assistant.py b/writer/review_assistant.py
+new file mode 100644
+index 0000000..71e0622
+--- /dev/null
++++ b/writer/review_assistant.py
+@@ -0,0 +1,119 @@
++∩╗┐"""
++Review helper checks for warning-first editorial QA.
++"""
++import re
++
++from database.db import is_topic_already_covered
++
++EN_MARKERS = {"the", "and", "with", "from", "what", "where", "how", "recipe", "ingredients", "price", "availability"}
++FR_MARKERS = {"le", "la", "les", "avec", "pour", "dans", "comment", "recette", "ingredients", "prix", "disponibilite"}
++
++
++def _strip_html(text):
++    clean = re.sub(r"<script[^>]*>.*?</script>", " ", text or "", flags=re.DOTALL | re.IGNORECASE)
++    clean = re.sub(r"<style[^>]*>.*?</style>", " ", clean, flags=re.DOTALL | re.IGNORECASE)
++    clean = re.sub(r"<[^>]+>", " ", clean)
++    return re.sub(r"\s+", " ", clean).strip().lower()
++
++
++def _marker_hits(text, markers):
++    hits = 0
++    for m in markers:
++        hits += len(re.findall(rf"\b{re.escape(m)}\b", text))
++    return hits
++
++
++def language_consistency(article):
++    text = _strip_html(article.get("content", ""))
++    en = _marker_hits(text, EN_MARKERS)
++    fr = _marker_hits(text, FR_MARKERS)
++    declared = (article.get("language") or "en").lower()
++
++    mixed = en >= 6 and fr >= 6 and 0.6 <= (en / max(fr, 1)) <= 1.8
++    mismatch = (declared == "en" and fr > en + 4) or (declared == "fr" and en > fr + 4)
++
++    if mixed or mismatch:
++        return False, f"Language warning (declared={declared}, EN hits={en}, FR hits={fr})"
++    return True, f"Language looks consistent (declared={declared})"
++
++
++def schema_presence(article):
++    content = article.get("content", "")
++    has_faq = bool(re.search(r'"@type"\s*:\s*"FAQPage"', content, flags=re.IGNORECASE))
++    has_recipe = bool(re.search(r'"@type"\s*:\s*"Recipe"', content, flags=re.IGNORECASE))
++    is_recipe_like = (article.get("category", "").lower() == "recipes") or bool((article.get("acf_fields") or {}).get("ingredients"))
++
++    status = []
++    status.append("FAQ schema: yes" if has_faq else "FAQ schema: no")
++    if is_recipe_like:
++        status.append("Recipe schema: present" if has_recipe else "Recipe schema: missing")
++    else:
++        status.append("Recipe schema: not required" if not has_recipe else "Recipe schema: present on non-recipe")
++
++    ok = (not is_recipe_like or has_recipe)
++    if not is_recipe_like and has_recipe:
++        ok = False
++
++    return ok, "; ".join(status)
++
++
++def duplicate_risk(conn, topic_title, threshold=0.35):
++    if not topic_title:
++        return False, "No topic title"
++    is_dup, dup_title, score = is_topic_already_covered(conn, topic_title, threshold=threshold)
++    if is_dup:
++        return True, f"Possible cannibalization: similar to '{dup_title[:70]}' (score {score:.2f})"
++    return False, f"No strong duplicate detected (threshold {threshold:.2f})"
++
++
++def rankmath_polylang_warnings(article):
++    warnings = []
++    lang = (article.get("language") or "").lower().strip()
++    if lang not in {"en", "fr"}:
++        warnings.append("Language should be 'en' or 'fr' for Polylang mapping.")
++
++    slug = (article.get("slug") or "").strip()
++    if not slug:
++        warnings.append("Slug is empty.")
++    elif slug != slug.lower() or " " in slug:
++        warnings.append("Slug should be lowercase with hyphens only.")
++
++    meta = (article.get("meta_description") or "").strip()
++    if len(meta) < 120:
++        warnings.append("Meta description looks too short for RankMath snippet quality.")
++
++    focus_kw = (article.get("matched_keyword") or "").strip()
++    tags = article.get("tags") or []
++    if not focus_kw and not tags:
++        warnings.append("No focus keyword/tags found for RankMath focus field fallback.")
++
++    return warnings
++
++
++def build_preapproval_checklist(article, topic, conn=None, duplicate_warning=None):
++    sources = [s for s in (article.get("sources_used") or []) if s and s != "aggregated_summaries"]
++    src_count = len(set(sources))
++    words = int(article.get("word_count") or len(_strip_html(article.get("content", "")).split()))
++
++    lang_ok, lang_msg = language_consistency(article)
++    schema_ok, schema_msg = schema_presence(article)
++
++    lines = [
++        "Pre-approval checklist",
++        f"- Sources used: {src_count}",
++        f"- Word count: {words}",
++        f"- {lang_msg}",
++        f"- {schema_msg}",
++    ]
++
++    if duplicate_warning:
++        lines.append(f"- {duplicate_warning}")
++
++    if src_count < 2:
++        lines.append("- Warning: low source diversity (<2 domains)")
++    if not lang_ok:
++        lines.append("- Warning: language consistency needs review")
++    if not schema_ok:
++        lines.append("- Warning: schema issue detected")
++
++    return "\n".join(lines)
+diff --git a/writer/seo_prompt.py b/writer/seo_prompt.py
+index 60396a3..9157189 100644
+--- a/writer/seo_prompt.py
++++ b/writer/seo_prompt.py
+@@ -1,9 +1,10 @@
+-"""
+-SEO Prompt Template ΓÇö Master prompt for Gemini article generation.
++∩╗┐"""
++SEO Prompt Template - Master prompt for Gemini article generation.
+ Tailored for el-mordjene.info: food, recipes, chocolate, desserts, spreads.
+ """
++import hashlib
+ 
+-# Real internal links only ΓÇö from existing published pages on el-mordjene.info
++# Real internal links only - from existing published pages on el-mordjene.info
+ INTERNAL_LINKS = {
+     "home": {"url": "https://el-mordjene.info/", "anchor": "El-Mordjene.info"},
+     "what_is": {"url": "https://el-mordjene.info/what-is-el-mordjene/", "anchor": "What is El Mordjene?"},
+@@ -23,7 +24,69 @@ INTERNAL_LINKS = {
+ }
+ 
+ 
+-def build_article_prompt(topic_title, source_texts, matched_keyword=""):
++
++
++
++def _pick_layout_variant(topic_title, matched_keyword):
++    variants = [
++        {
++            "name": "Explainer and Practical Steps",
++            "outline": [
++                "Start with the key question users ask now",
++                "Explain what changed and why the topic matters",
++                "Give practical steps readers can follow",
++                "Add common mistakes and fixes",
++                "Close with a concise FAQ section",
++            ],
++        },
++        {
++            "name": "Myth vs Fact and Action Plan",
++            "outline": [
++                "Summarize what is confirmed vs uncertain",
++                "Add a myth-vs-fact evidence section",
++                "Provide a do-this-next checklist",
++                "Cover substitutions and alternatives",
++                "Close with transactional FAQ questions",
++            ],
++        },
++        {
++            "name": "Chooser Guide",
++            "outline": [
++                "Define user intent and decision criteria",
++                "Compare options by quality, price, and availability",
++                "Highlight warning signs and authenticity checks",
++                "Explain who should choose which option",
++                "Close with FAQ answers to buying concerns",
++            ],
++        },
++        {
++            "name": "Trend Analysis and Regional Context",
++            "outline": [
++                "Describe why this trend accelerated",
++                "Compare US, EU, FR, or DZ angles when relevant",
++                "Explain social media influence",
++                "Add likely 30-90 day outlook",
++                "Close with short direct FAQ answers",
++            ],
++        },
++    ]
++
++    seed = f"{topic_title}|{matched_keyword}".strip().lower()
++    idx = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % len(variants)
++    return variants[idx]
++def _intent_guidance(intent):
++    intent_map = {
++        "recipe": "Focus on clear steps, ingredient substitutions, and practical tips. Keep claims concrete.",
++        "news": "Focus on what changed, why it matters now, and cite source-backed facts with caution language.",
++        "buyer": "Focus on availability, authenticity checks, pricing caveats, and decision criteria.",
++        "explainer": "Focus on definitions, context, misconceptions, and concise answers.",
++        "refresh": "Treat this as an update to an existing page. Emphasize what changed and refresh stale sections.",
++        "trend": "Focus on evidence of momentum, drivers of growth, and likely short-term direction.",
++    }
++    return intent_map.get((intent or "").strip().lower(), intent_map["explainer"])
++
++
++def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="general"):
+     """
+     Build the master SEO prompt for Gemini article generation.
+     """
+@@ -34,196 +97,96 @@ def build_article_prompt(topic_title, source_texts, matched_keyword=""):
+ {src.get('text', '')[:2000]}
+ """
+ 
+-    links_suggestion = "\n".join([
++    links_suggestion = "\n".join(
+         f"  - [{info['anchor']}]({info['url']})"
+-        for key, info in INTERNAL_LINKS.items()
+-    ])
++        for info in INTERNAL_LINKS.values()
++    )
+ 
+-    prompt = f"""You are an expert food journalist, recipe developer, and master of Semantic Search, AEO (Answer Engine Optimization), and GEO (Generative Engine Optimization) for el-mordjene.info.
+-Your articles must be engineered to rank instantly by providing high information density, clear entity relationships, and direct answers.
++    variant = _pick_layout_variant(topic_title, matched_keyword)
++    outline = "\n".join(f"  - {item}" for item in variant["outline"])
+ 
+-TASK: Write a complete, publish-ready article about the following trending food/recipe topic.
++    prompt = f"""You are an expert food journalist and recipe writer for el-mordjene.info.
++Write one complete, publish-ready article with high factual reliability and high user value.
+ 
+-TRENDING TOPIC: {topic_title}
+-PRIMARY KEYWORD: {matched_keyword or topic_title}
++TASK:
++- TRENDING TOPIC: {topic_title}
++- PRIMARY KEYWORD: {matched_keyword or topic_title}
+ 
+-ΓöÇΓöÇΓöÇ SOURCE MATERIAL (use ONLY these facts, do NOT fabricate) ΓöÇΓöÇΓöÇ
++SOURCE MATERIAL (use only these facts):
+ {sources_block}
+ 
+-ΓöÇΓöÇΓöÇ ADVANCED OPTIMIZATION RULES (NON-NEGOTIABLE) ΓöÇΓöÇΓöÇ
+-
+-**1. KEYWORD DENSITY:** Ensure the primary keyword density is **strictly below 0.8%** in the paragraph text. Avoid keyword stuffing. Use synonyms and related entities instead.
+-
+-**2. AEO & GEO OPTIMIZATION:**
+-- Use **Answer Language Processing (ALP)**: Provide direct, factual, and concise answers to the core questions implied by the topic.
+-- **Entity-Focused Writing**: Explicitly mention and connect key entities (ingredients, brands, regions, techniques). Use full names.
+-- Structure data for **Generative Search Engines**: Use clear, declarative sentences that are easy for AI models to parse and cite.
+-- **EEAT**: Demonstrate expert-level insight by synthesizing source facts into a cohesive, helpful narrative.
+-
+-**3. LANGUAGE DETECTION & TRANSLATION:**
+-- If the primary topic, keyword, or source material is in French (like "recette alg├⌐rienne" or "p├ótisserie alg├⌐rienne"), write the ENTIRE article in French.
+-- Otherwise, write the article in English.
+-- NEVER mix the languages within the content body (except for proper nouns).
+-
+-**4. STYLE CONSTRAINTS:**
+-- **NO EMOJIS**: Strictly prohibited in the article body and headings.
+-- **NO DASHES**: Do not use dashes (ΓÇö) for punctuation. Use commas, colons, or periods instead.
+-- **Short Paragraphs**: 2 sentences max per <p> tag to ensure high readability scores.
+-- **Warm & instructional tone**: Write like a passionate home chef sharing secrets with a friend, not a textbook.
+-
+-**4. SCHEMA TAGS (CRITICAL):** The JSON-LD FAQ schema MUST be strictly wrapped in `<script type="application/ld+json">` and `</script>` tags. Without these tags, the schema will display visibly as text, which ruins the page layout. Do not forget the script tags!
+-
+-ΓöÇΓöÇΓöÇ ARTICLE STRUCTURE ΓöÇΓöÇΓöÇ
+-
+-1. TITLE: SEO-optimized, under 60 chars.
+-2. META_DESCRIPTION: 150-155 characters. Start with an action verb.
+-3. SLUG: Keyword-rich, lowercase, hyphens only.
+-4. ARTICLE BODY: Magazine-quality HTML (design details below).
+-5. FAQ: 3-4 schema-ready questions with food-specific, helpful answers.
+-
+-**1. NO WORDPRESS BLOCK COMMENTS**: Do NOT output any `<!-- wp:... -->` comments. Produce strictly raw HTML.
+-
+-**2. FOLLOW THIS EXACT HTML TEMPLATE** (Copy the structure and inline styles exactly):
+-
+-<div class="wp-block-group" style="padding:1.5rem 2rem 2.5rem 2rem">
+-
+-<h2 class="wp-block-heading">[Your Main Heading]</h2>
+-<p>[Engaging intro that hooks the reader with a question or surprising fact...]</p>
+-<p>[More text establishing context and why this matters now...]</p>
+-
+-<div style="border-left: 4px solid #d4a574;padding: 1rem 1.25rem;margin: 1.5rem 0;border-radius: 0 8px 8px 0;background-color:#fdf6f0;color:#000000;">
+-<h3 style="margin: 0 0 0.75rem 0;font-size: 1.1rem;color:#000000;">Key Facts</h3>
+-<ul style="margin: 0;padding-left: 1.25rem;line-height: 1.6;color:#000000;">
+-<li>[Fact 1]</li>
+-<li>[Fact 2]</li>
+-<li>[Fact 3]</li>
+-</ul>
+-</div>
+-
+-<h2>[Next Section Heading]</h2>
+-<p>[Section text... example internal link: <a href="https://el-mordjene.info/homemade-chocolate-recipes/">homemade chocolate recipes</a>...]</p>
+-
+-<div style="padding: 1rem 1.25rem;margin: 1.5rem 0;border: 1px solid #d4a574;border-radius: 8px;background-color:#fdf6f0;color:#000000;">
+-<strong>Pro Tip:</strong> [A practical cooking tip, ingredient substitution, or time-saver related to the recipe/topic.]
+-</div>
+-
+-<h2>[Another Section Heading]</h2>
+-<p>[Content...]</p>
+-
+-<div style="display:block !important; padding:2rem !important; margin:2rem 0 !important; border-radius:12px !important; background:linear-gradient(135deg,#3d2b1f,#5c3d2e,#8b6914) !important; text-align:center !important; box-shadow:0 10px 20px rgba(0,0,0,0.15) !important; border-left:5px solid #d4a574 !important;">
+-<p style="font-size:1.5rem !important; font-weight:800 !important; margin:0 0 0.5rem 0 !important; text-transform:uppercase !important; letter-spacing:1px !important; color:#ffffff !important;">Explore More Recipes</p>
+-<p style="font-size:1.1rem !important; color:#f5e6d3 !important; font-weight:400 !important; margin:0 0 1rem 0 !important;">Discover viral desserts, homemade chocolate, and gourmet spreads</p>
+-<a href="https://el-mordjene.info/" style="display:inline-block !important; padding:0.75rem 2rem !important; background:#d4a574 !important; color:#ffffff !important; text-decoration:none !important; border-radius:8px !important; font-weight:700 !important; font-size:1rem !important; letter-spacing:0.5px !important;">Visit El-Mordjene.info &rarr;</a>
+-</div>
+-
+-<h2>Frequently Asked Questions</h2>
+-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
+-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
+-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 1?]</h3>
+-<p style="margin: 0;color:#000000;">[Answer to Question 1.]</p>
+-</div>
+-</div>
+-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
+-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
+-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 2?]</h3>
+-<p style="margin: 0;color:#000000;">[Answer to Question 2.]</p>
+-</div>
+-</div>
+-<div style="margin: 1.5rem 0;border-radius: 8px;border:1px solid #ddd;overflow: hidden;color:#000000;">
+-<div style="padding: 1rem 1.25rem;background-color:#fdf6f0;">
+-<h3 style="margin: 0 0 0.5rem 0;font-size: 1.1rem;color:#000000;">[Question 3?]</h3>
+-<p style="margin: 0;color:#000000;">[Answer to Question 3.]</p>
+-</div>
+-</div>
+-
+-<!-- CRITICAL: DO NOT FORGET THESE SCRIPT TAGS AROUND THE JSON! -->
+-<script type="application/ld+json">
+-{{
+-  "@context": "https://schema.org",
+-  "@type": "FAQPage",
+-  "mainEntity": [
+-    {{
+-      "@type": "Question",
+-      "name": "[Question 1?]",
+-      "acceptedAnswer": {{
+-        "@type": "Answer",
+-        "text": "[Answer to Question 1.]"
+-      }}
+-    }},
+-    {{
+-      "@type": "Question",
+-      "name": "[Question 2?]",
+-      "acceptedAnswer": {{
+-        "@type": "Answer",
+-        "text": "[Answer to Question 2.]"
+-      }}
+-    }},
+-    {{
+-      "@type": "Question",
+-      "name": "[Question 3?]",
+-      "acceptedAnswer": {{
+-        "@type": "Answer",
+-        "text": "[Answer to Question 3.]"
+-      }}
+-    }}
+-  ]
+-}}
+-</script>
+-</div>
+-
+-INTERNAL LINKING RULES (STRICT):
+-- ONLY use genuine links from the list below. Do NOT invent any internal URL.
+-- Include 2-3 genuine internal links, naturally placed where they fit the topic.
+-- Use the exact URL and suggested anchor text. Format: <a href="EXACT_URL">anchor text</a>
+-
+-Allowed genuine internal links:
++NON-NEGOTIABLE RULES:
++1. Do not fabricate facts, prices, legal claims, ingredient data, or nutrition details.
++2. If sources conflict, mention that explicitly and present both sides.
++3. Use one language for the entire article: English OR French, never mixed.
++4. Keep primary keyword density under 0.8 percent in paragraph text.
++5. No emojis in body copy.
++6. Do not output WordPress block comments like <!-- wp:... -->.
++
++LAYOUT VARIANT TO USE:
++- Variant: {variant['name']}
++- Outline:
++{outline}
++
++INTENT GUIDANCE:
++- Intent: {intent}
++- {_intent_guidance(intent)}
++
++STYLE REQUIREMENTS:
++- Output clean HTML only for the article body.
++- Use natural heading hierarchy with varied section names.
++- Keep paragraphs short and readable.
++- Include one key-takeaways box and one practical tip box.
++- Include one CTA section near the end with wording that matches the topic.
++
++FAQ AND SCHEMA RULES:
++- Add FAQ only if it helps search intent.
++- If FAQ is included, include valid FAQPage JSON-LD wrapped in:
++  <script type="application/ld+json"> ... </script>
++- Do NOT include Recipe JSON-LD in the HTML body.
++- Recipe schema is generated by the system separately for real recipe posts.
++
++INTERNAL LINKING RULES:
++- Use exactly 2-3 internal links from the approved list below.
++- Never invent URLs.
++
++Allowed internal links:
+ {links_suggestion}
+ 
+-EDITORIAL GUIDELINES:
+-- Tone: Warm, instructional, and passionate. Write like a beloved food blogger.
+-- Word count: 800-1500 words
+-- NEVER fabricate facts, recipes, nutritional data, or ingredient amounts.
+-- If sources conflict, mention both perspectives.
+-- Use short paragraphs (2-3 sentences max per paragraph).
+-- Include transition words for SEO readability.
+-- This site is an independent food resource, not affiliated with any brand.
+-
+ RECIPE DATA REQUIREMENTS:
+-If the topic is a recipe (or if you generate a recipe within the article), you MUST extract the recipe details into a strict JSON format. 
+-If it is NOT a recipe, output an empty JSON object {{}}.
+-- "recipe_name": The name of the recipe (String).
+-- "recipe_description": Short 1-2 sentence summary for schema (String).
+-- "recipe_yield": e.g. "4 servings" (String).
+-- "prep_time_minutes": Numeric value in minutes (Number).
+-- "cook_time_minutes": Numeric value in minutes (Number).
+-- "total_time_minutes": Optional, or blank to auto-calc (String).
+-- "ingredients": One ingredient per line, separated by newlines within the string (String).
+-- "instructions": One step per line, separated by newlines within the string (String).
+-- "recipe_image": Leave empty, the system will populate this (String).
+-- "nutrition_calories": e.g. "120 kcal" (String).
+-- "video_url": ONLY include if the source material is from a YouTube video URL. Otherwise leave blank (String).
+-- "author_name": Optional (String).
+-- "recipe_keywords": Comma-separated keywords, e.g. "chocolate, dessert, viral" (String).
+-- "recipecuisine": e.g. "International", "French" (String).
+-- "recipecategory": e.g. "Dessert", "Chocolate" (String).
+-- "video_upload_date": ONLY include if there's a video URL, format YYYY-MM-DD. Otherwise leave blank. (String).
+-
+-OUTPUT FORMAT:
+-Return your response in this exact structured format:
+-
+-TITLE: [your title]
+-META_DESCRIPTION: [your meta description]
+-SLUG: [your-slug]
+-TAGS: [tag1, tag2, tag3, ...]
+-CATEGORY: [Choose the most appropriate single category: Recipes OR Food News OR Trends OR Sweets]
++If this is a real recipe article, output a strict JSON object. If not, output {{}}.
++Required JSON fields:
++- recipe_name (string)
++- recipe_description (string)
++- recipe_yield (string)
++- prep_time_minutes (number)
++- cook_time_minutes (number)
++- total_time_minutes (string, optional)
++- ingredients (string, one ingredient per line)
++- instructions (string, one step per line)
++- recipe_image (string, keep empty)
++- nutrition_calories (string)
++- video_url (string, empty if none)
++- author_name (string, optional)
++- recipe_keywords (string)
++- recipecuisine (string)
++- recipecategory (string)
++- video_upload_date (YYYY-MM-DD or empty)
++
++OUTPUT FORMAT (STRICT):
++TITLE: [under 60 chars]
++META_DESCRIPTION: [140-160 chars]
++SLUG: [lowercase-hyphenated]
++TAGS: [tag1, tag2, tag3]
++CATEGORY: [Recipes OR Food News OR Trends OR Sweets]
+ LANGUAGE: [en or fr]
+ 
+ ---CONTENT_START---
+-[Generate the entire HTML structure exactly as specified in the HTML template above. CRITICAL: the FAQ JSON-LD schema at the end MUST be inside <script type="application/ld+json">...</script> tags! Output the RAW HTML directly without using ```html markdown tags!]
++[Raw HTML article body only]
+ ---CONTENT_END---
+ 
+ ---RECIPE_DATA_START---
+-[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. CRITICAL: Provide ONLY raw JSON text. DO NOT wrap the JSON in ```json or any other markdown formatting.]
++[Raw JSON object only, no markdown fences]
+ ---RECIPE_DATA_END---
+ """
+ 
+@@ -256,3 +219,6 @@ Exclusions:
+ - No cluttered or messy backgrounds"""
+ 
+     return prompt
++
++
++
+diff --git a/writer/source_fetcher.py b/writer/source_fetcher.py
+index ae604a2..e86a41e 100644
+--- a/writer/source_fetcher.py
++++ b/writer/source_fetcher.py
+@@ -1,12 +1,13 @@
+ """
+-Source Fetcher ΓÇö Downloads and extracts clean text from news/blog article URLs.
++Source Fetcher - Downloads and extracts clean text from news/blog article URLs.
+ Used to gather factual information before generating AI articles.
+ """
+ import logging
+ import re
+-import requests
+ from urllib.parse import urlparse
+ 
++import requests
++
+ logger = logging.getLogger(__name__)
+ 
+ BLOCKED_DOMAINS = {
+@@ -17,6 +18,16 @@ BLOCKED_DOMAINS = {
+     "www.youtube.com",
+ }
+ 
++TRUSTED_DOMAIN_HINTS = {
++    "reuters.com", "apnews.com", "bbc.com", "nytimes.com", "theguardian.com",
++    "washingtonpost.com", "forbes.com", "cnbc.com", "fda.gov", "efsa.europa.eu",
++    "usda.gov", "who.int",
++}
++
++LOW_QUALITY_DOMAIN_HINTS = {
++    "pinterest.", "tumblr.", "blogspot.", "medium.com", "quora.com", "reddit.com",
++}
++
+ HEADERS = {
+     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+@@ -35,12 +46,12 @@ def fetch_article_text(url, max_chars=3000):
+     domain = urlparse(url).netloc.replace("www.", "")
+ 
+     if domain in BLOCKED_DOMAINS or urlparse(url).netloc in BLOCKED_DOMAINS:
+-        logger.debug(f"  ΓÅ¡∩╕Å Skipping blocked domain: {domain}")
++        logger.debug(f"  Skipping blocked domain: {domain}")
+         return None
+ 
+-    # Try trafilatura first
+     try:
+         import trafilatura
++
+         downloaded = trafilatura.fetch_url(url)
+         if downloaded:
+             text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+@@ -60,7 +71,6 @@ def fetch_article_text(url, max_chars=3000):
+     except Exception as e:
+         logger.warning(f"trafilatura failed for {url}: {e}")
+ 
+-    # Fallback: basic requests + regex extraction
+     try:
+         response = requests.get(url, headers=HEADERS, timeout=15)
+         response.raise_for_status()
+@@ -96,19 +106,46 @@ def fetch_article_text(url, max_chars=3000):
+     return None
+ 
+ 
++def _source_quality_score(url):
++    """Score source URL quality for ranking extraction order."""
++    try:
++        domain = urlparse(url).netloc.replace("www.", "").lower()
++    except Exception:
++        return 0
++
++    score = 0
++    if any(h in domain for h in TRUSTED_DOMAIN_HINTS):
++        score += 4
++    if any(h in domain for h in LOW_QUALITY_DOMAIN_HINTS):
++        score -= 3
++    if domain.endswith(".gov") or domain.endswith(".edu"):
++        score += 2
++    return score
++
++
+ def fetch_multiple_sources(urls, max_sources=5):
+     """Fetch text from multiple source URLs."""
+     sources = []
+ 
+-    for url in urls[:max_sources]:
++    seen_urls = set()
++    ranked_urls = []
++    for idx, url in enumerate(urls):
++        if not url or url in seen_urls:
++            continue
++        seen_urls.add(url)
++        ranked_urls.append((_source_quality_score(url), -idx, url))
++
++    ranked_urls.sort(reverse=True)
++
++    for _, _, url in ranked_urls[:max_sources]:
+         try:
+             result = fetch_article_text(url)
+             if result:
+                 sources.append(result)
+-                logger.info(f"  Γ£à Extracted {len(result['text'])} chars from {result['source_domain']}")
++                logger.info(f"  Extracted {len(result['text'])} chars from {result['source_domain']}")
+             else:
+-                logger.warning(f"  ΓÜá∩╕Å Could not extract from: {url[:80]}")
++                logger.warning(f"  Could not extract from: {url[:80]}")
+         except Exception as e:
+-            logger.error(f"  Γ¥î Error fetching {url[:80]}: {e}")
++            logger.error(f"  Error fetching {url[:80]}: {e}")
+ 
+     return sources
+
+commit d78dc2d10e8efb0ea3124a5c1374917bee966220
+Author: = <=>
+Date:   Fri Mar 6 14:41:39 2026 +0500
+
+    test: Add script to verify RankMath meta field updates via WordPress REST API.
+
+diff --git a/debug_rm.json b/debug_rm.json
+new file mode 100644
+index 0000000..fc9be9c
+--- /dev/null
++++ b/debug_rm.json
+@@ -0,0 +1,4 @@
++{
++  "status_code": 403,
++  "response": "{\"code\":\"rest_cannot_update\",\"message\":\"Sorry, you are not allowed to edit the rank_math_focus_keyword custom field.\",\"data\":{\"key\":\"rank_math_focus_keyword\",\"status\":403}}"
++}
+\ No newline at end of file
+diff --git a/temp_wp_test.py b/temp_wp_test.py
+new file mode 100644
+index 0000000..4313e4d
+--- /dev/null
++++ b/temp_wp_test.py
+@@ -0,0 +1,58 @@
++import requests
++import json
++from requests.auth import HTTPBasicAuth
++import os
++import sys
++
++# load env manually
++with open('.env', 'r') as f:
++    for line in f:
++        line = line.strip()
++        if line and not line.startswith('#'):
++            k, v = line.split('=', 1)
++            os.environ[k] = v
++
++WP_URL = os.environ.get('WP_BASE_URL', 'https://el-mordjene.info')
++WP_USERNAME = os.environ.get('WP_USERNAME')
++WP_APP_PASSWORD = os.environ.get('WP_APP_PASSWORD')
++
++API_BASE = f"{WP_URL}/wp-json/wp/v2"
++AUTH = HTTPBasicAuth(WP_USERNAME, WP_APP_PASSWORD)
++
++def test_api():
++    print("Testing new RankMath insertion hook...")
++    
++    # We will create a draft post to trigger `rest_insert_post` 
++    post_data = {
++        "title": "RankMath Hook Test Post",
++        "content": "This is a test post to verify RankMath meta via REST API.",
++        "status": "draft",
++        "meta": {
++            "rank_math_title": "Verified RM Title",
++            "rank_math_focus_keyword": "hook test"
++        }
++    }
++    
++    res = requests.post(f"{API_BASE}/posts", json=post_data, auth=AUTH)
++    
++    if res.status_code in [200, 201]:
++        data = res.json()
++        print(f"Γ£à Post created successfully! ID: {data.get('id')}")
++        
++        # WP native response might not return 'meta' by default if unregistered
++        # But we can check if it exists or we can just fetch it again
++        print("Meta returned by API on creation:", data.get('meta', {}))
++        
++        print("\nΓ£à Test passed! The 403 error is completely gone and the post was created successfully.")
++        print(f"Please check your WordPress Admin dashboard for a new draft post titled 'RankMath Hook Test Post' (ID: {data['id']}).")
++        print("Open the post and scroll down to the RankMath SEO box. You should see:")
++        print(" - Focus Keyword: 'hook test'")
++        print(" - Title: 'Verified RM Title'")
++
++    else:
++        print(f"Γ¥î Post creation failed. Status: {res.status_code}")
++        print(res.text)
++
++test_api()
++
++
+diff --git a/test_out.txt b/test_out.txt
+new file mode 100644
+index 0000000..9ea7448
+Binary files /dev/null and b/test_out.txt differ
+diff --git a/test_rm_output.txt b/test_rm_output.txt
+new file mode 100644
+index 0000000..6d1f14b
+Binary files /dev/null and b/test_rm_output.txt differ
+diff --git a/test_rm_output2.txt b/test_rm_output2.txt
+new file mode 100644
+index 0000000..6d1f14b
+Binary files /dev/null and b/test_rm_output2.txt differ
+diff --git a/test_rm_output3.txt b/test_rm_output3.txt
+new file mode 100644
+index 0000000..6d1f14b
+Binary files /dev/null and b/test_rm_output3.txt differ
+diff --git a/test_rm_output4.txt b/test_rm_output4.txt
+new file mode 100644
+index 0000000..78af0cc
+Binary files /dev/null and b/test_rm_output4.txt differ
+
+commit 41e5248992b6a5d3343346f0b9acd58b6d1ee498
+Author: = <=>
+Date:   Fri Mar 6 14:34:27 2026 +0500
+
+    Fix Gemini AI JSON output breaking ACF fields & allow dynamic categories
+
+diff --git a/writer/article_generator.py b/writer/article_generator.py
+index 5800209..0711b68 100644
+--- a/writer/article_generator.py
++++ b/writer/article_generator.py
+@@ -262,6 +262,16 @@ def _parse_article_output(raw_text):
+         result["acf_fields"] = {}
+         if recipe_match:
+             recipe_json_str = recipe_match.group(1).strip()
++            
++            # 1. Clean up potential markdown formatting around the JSON
++            if recipe_json_str.startswith("```json"):
++                recipe_json_str = recipe_json_str[7:].strip()
++            elif recipe_json_str.startswith("```"):
++                recipe_json_str = recipe_json_str[3:].strip()
++                
++            if recipe_json_str.endswith("```"):
++                recipe_json_str = recipe_json_str[:-3].strip()
++
+             # Try to parse it
+             try:
+                 recipe_data = json.loads(recipe_json_str)
+diff --git a/writer/seo_prompt.py b/writer/seo_prompt.py
+index 9d0387a..60396a3 100644
+--- a/writer/seo_prompt.py
++++ b/writer/seo_prompt.py
+@@ -215,7 +215,7 @@ TITLE: [your title]
+ META_DESCRIPTION: [your meta description]
+ SLUG: [your-slug]
+ TAGS: [tag1, tag2, tag3, ...]
+-CATEGORY: Recipes
++CATEGORY: [Choose the most appropriate single category: Recipes OR Food News OR Trends OR Sweets]
+ LANGUAGE: [en or fr]
+ 
+ ---CONTENT_START---
+@@ -223,7 +223,7 @@ LANGUAGE: [en or fr]
+ ---CONTENT_END---
+ 
+ ---RECIPE_DATA_START---
+-[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. No extra formatting or markdown around the JSON.]
++[Output the strict JSON object here containing recipe details, or {{}} if not a recipe. CRITICAL: Provide ONLY raw JSON text. DO NOT wrap the JSON in ```json or any other markdown formatting.]
+ ---RECIPE_DATA_END---
+ """
+ 
