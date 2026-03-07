@@ -330,6 +330,99 @@ def _extract_recipe_fields_via_fallback(article):
         return {}
 
 
+def _strip_html_tags(html):
+    if not html:
+        return ""
+    text = re.sub(r'<script\b[^>]*>.*?</script>', ' ', html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<style\b[^>]*>.*?</style>', ' ', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _extract_intro_text(content, max_words=120):
+    plain = _strip_html_tags(content)
+    if not plain:
+        return ""
+    words = plain.split()
+    return " ".join(words[:max_words]).strip()
+
+
+def _extract_heading_texts(content):
+    if not content:
+        return []
+    headings = re.findall(r'<h[2-3][^>]*>(.*?)</h[2-3]>', content, flags=re.IGNORECASE | re.DOTALL)
+    return [_strip_html_tags(item).strip() for item in headings if _strip_html_tags(item).strip()]
+
+
+def _keyword_in_text(keyword, text):
+    keyword = (keyword or '').strip().lower()
+    text = (text or '').strip().lower()
+    if not keyword or not text:
+        return False
+    return keyword in text
+
+
+def _compute_keyword_density(keyword, content):
+    keyword = (keyword or '').strip().lower()
+    plain = _strip_html_tags(content).lower()
+    if not keyword or not plain:
+        return 0.0
+    words = re.findall(r'\b\w+\b', plain)
+    if not words:
+        return 0.0
+    occurrences = plain.count(keyword)
+    return round((occurrences / len(words)) * 100, 2)
+
+
+def _build_generation_checks(article, primary_keyword):
+    focus_keyword = (primary_keyword or article.get('title', '')).strip()
+    title = article.get('title', '')
+    meta = article.get('meta_description', '')
+    slug = article.get('slug', '')
+    content = article.get('content', '')
+    intro = _extract_intro_text(content)
+    headings = _extract_heading_texts(content)
+    density = _compute_keyword_density(focus_keyword, content)
+
+    checks = {
+        'focus_keyword': focus_keyword,
+        'title_has_keyword': _keyword_in_text(focus_keyword, title),
+        'meta_has_keyword': _keyword_in_text(focus_keyword, meta),
+        'slug_has_keyword': _keyword_in_text(focus_keyword.replace(' ', '-'), slug),
+        'intro_has_keyword': _keyword_in_text(focus_keyword, intro),
+        'has_h2_or_h3': bool(headings),
+        'h2_has_keyword': any(_keyword_in_text(focus_keyword, heading) for heading in headings),
+        'title_length': len(title),
+        'meta_length': len(meta),
+        'keyword_density_percent': density,
+    }
+
+    warnings = []
+    if focus_keyword and not checks['title_has_keyword']:
+        warnings.append('Title is missing the focus keyword.')
+    if focus_keyword and not checks['meta_has_keyword']:
+        warnings.append('Meta description is missing the focus keyword.')
+    if focus_keyword and not checks['slug_has_keyword']:
+        warnings.append('Slug does not reflect the focus keyword.')
+    if focus_keyword and not checks['intro_has_keyword']:
+        warnings.append('Opening section does not mention the focus keyword early enough.')
+    if not checks['has_h2_or_h3']:
+        warnings.append('Article body is missing structured subheadings.')
+    elif focus_keyword and not checks['h2_has_keyword']:
+        warnings.append('No subheading includes the focus keyword.')
+    if checks['title_length'] > 60:
+        warnings.append('Title is longer than 60 characters.')
+    if checks['meta_length'] < 140 or checks['meta_length'] > 160:
+        warnings.append('Meta description is outside the 140-160 character target.')
+    if density == 0:
+        warnings.append('Focus keyword does not appear in the article body.')
+    elif density > 1.5:
+        warnings.append('Focus keyword density may be too high.')
+
+    checks['warnings'] = warnings
+    return checks
+
+
 def _parse_article_output(raw_text, intent=None):
     """Parse the structured output from Gemini into article components."""
     try:
@@ -483,8 +576,16 @@ def generate_article(topic, source_urls=None):
         article["intent"] = intent
         article["sources_used"] = [s.get("source_domain", "") for s in source_texts]
         article["word_count"] = len(article.get("content", "").split())
+        article["generation_checks"] = _build_generation_checks(
+            article,
+            topic.get("matched_keyword", "") or topic.get("topic", ""),
+        )
+        for warning in article["generation_checks"].get("warnings", []):
+            logger.warning(f"   Content quality warning: {warning}")
         logger.info(f"   Article generated: '{article['title']}' ({article['word_count']} words)")
     else:
         logger.error("   Failed to parse Gemini output")
 
     return article
+
+

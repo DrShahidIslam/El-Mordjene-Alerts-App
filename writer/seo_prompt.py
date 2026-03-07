@@ -139,6 +139,19 @@ STYLE REQUIREMENTS:
 - Keep paragraphs short and readable.
 - Include one key-takeaways box and one practical tip box.
 - Include one CTA section near the end with wording that matches the topic.
+- Begin with a strong 2-3 sentence hook that matches search intent and gives readers a reason to continue.
+- In the first 120 words, give a direct answer or clear summary before expanding into details.
+- The article body must not repeat the exact title as a visible heading.
+
+SEO, AEO, AND GEO REQUIREMENTS:
+- Treat PRIMARY KEYWORD as the focus keyword for the article.
+- Use the focus keyword naturally in the TITLE, META_DESCRIPTION, SLUG, opening paragraph, and at least one <h2>.
+- Keep the title compelling and clear, not vague and not clickbait.
+- Make the meta description attractive, keyword-rich, and benefit-driven while staying within 140-160 characters.
+- Structure the article for both search engines and answer engines: fast answer first, then supporting detail.
+- Use clear entities, product names, and context so AI/search systems can identify what the page is about.
+- Use close keyword variations naturally, but keep the focus keyword as the main phrase.
+- Avoid keyword stuffing, filler intros, and generic conclusions.
 
 FAQ AND SCHEMA RULES:
 - Add FAQ only if it helps search intent.
@@ -221,3 +234,4 @@ Exclusions:
 - No cluttered or messy backgrounds"""
 
     return prompt
+
