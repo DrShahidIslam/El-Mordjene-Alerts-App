@@ -39,24 +39,80 @@ RECIPE_KEY_ALIASES = {
     "recipe_title": "recipe_name",
     "name": "recipe_name",
     "title": "recipe_name",
+    "nom": "recipe_name",
+    "nom_recette": "recipe_name",
     "description": "recipe_description",
     "recipe_summary": "recipe_description",
     "summary": "recipe_description",
+    "resume": "recipe_description",
+    "description_recette": "recipe_description",
     "yield": "recipe_yield",
     "servings": "recipe_yield",
+    "portions": "recipe_yield",
     "prep_time": "prep_time_minutes",
+    "temps_preparation": "prep_time_minutes",
     "cook_time": "cook_time_minutes",
+    "temps_cuisson": "cook_time_minutes",
     "total_time": "total_time_minutes",
+    "temps_total": "total_time_minutes",
     "recipe_cuisine": "recipecuisine",
     "recipe_category": "recipecategory",
+    "cuisine": "recipecuisine",
+    "categorie": "recipecategory",
     "keywords": "recipe_keywords",
+    "mots_cles": "recipe_keywords",
     "calories": "nutrition_calories",
     "image": "recipe_image",
     "image_url": "recipe_image",
     "video": "video_url",
     "video_date": "video_upload_date",
     "video_upload": "video_upload_date",
+    "auteur": "author_name",
+    "etapes": "instructions",
 }
+
+RECIPE_CATEGORY_NAMES = {"recipes", "recettes"}
+RECIPE_TITLE_MARKERS = [
+    "recipe",
+    "recette",
+    "how to make",
+    "comment faire",
+    "copycat",
+    "homemade",
+    "fait maison",
+    "ingredients",
+    "ingr\u00e9dients",
+    "instructions",
+]
+INGREDIENT_SECTION_NAMES = ["Ingredients", "Ingredients List", "Ingr\u00e9dients"]
+INSTRUCTION_SECTION_NAMES = ["Instructions", "Method", "Directions", "Preparation", "Pr\u00e9paration", "\u00c9tapes", "Etapes"]
+INGREDIENT_STOP_NAMES = [
+    "Equipment",
+    "Instructions",
+    "Method",
+    "Directions",
+    "Preparation",
+    "Pr\u00e9paration",
+    "\u00c9tapes",
+    "Etapes",
+    "Practical Tips",
+    "Conseils pratiques",
+    "Outlook",
+    "Frequently Asked Questions",
+    "Questions fr\u00e9quentes",
+    "FAQ",
+    "Post Tags",
+]
+INSTRUCTION_STOP_NAMES = [
+    "Practical Tips",
+    "Conseils pratiques",
+    "Outlook",
+    "Enjoy",
+    "Frequently Asked Questions",
+    "Questions fr\u00e9quentes",
+    "FAQ",
+    "Post Tags",
+]
 
 
 def _infer_intent(topic):
@@ -274,8 +330,8 @@ def _content_has_recipe_structure(content):
     if not text:
         return False
 
-    has_ingredients = bool(re.search(r'(?im)^(ingredients|ingredients list)\\s*:?\\s*$', text))
-    has_instructions = bool(re.search(r'(?im)^(instructions|method|directions|preparation)\\s*:?\\s*$', text))
+    has_ingredients = bool(re.search(r'(?im)^(ingredients|ingredients list|ingr\u00e9dients)\s*:?\s*$', text))
+    has_instructions = bool(re.search(r'(?im)^(instructions|method|directions|preparation|pr\u00e9paration|\u00e9tapes|etapes)\s*:?\s*$', text))
     return has_ingredients and has_instructions
 
 def _is_recipe_article(result, intent=None):
@@ -287,13 +343,13 @@ def _is_recipe_article(result, intent=None):
     tags = " ".join(result.get("tags", [])).lower()
     acf_fields = result.get("acf_fields", {}) or {}
     content = result.get("content", "") or result.get("full_content", "")
-    recipe_markers = ["recipe", "how to make", "copycat", "homemade", "ingredients", "instructions"]
 
     return (
-        category == "recipes"
+        category in RECIPE_CATEGORY_NAMES
         or "recipe" in slug
-        or any(marker in title for marker in recipe_markers)
-        or any(marker in tags for marker in recipe_markers)
+        or "recette" in slug
+        or any(marker in title for marker in RECIPE_TITLE_MARKERS)
+        or any(marker in tags for marker in RECIPE_TITLE_MARKERS)
         or bool(acf_fields.get("ingredients") or acf_fields.get("instructions"))
         or _content_has_recipe_structure(content)
     )
@@ -506,13 +562,13 @@ def _extract_recipe_fields_from_article(article):
     text = _content_to_line_text(content)
     ingredients_block = _extract_named_section(
         text,
-        ['Ingredients'],
-        ['Equipment', 'Instructions', 'Method', 'Directions', 'Practical Tips', 'Outlook', 'Frequently Asked Questions', 'FAQ', 'Post Tags'],
+        INGREDIENT_SECTION_NAMES,
+        INGREDIENT_STOP_NAMES,
     )
     instructions_block = _extract_named_section(
         text,
-        ['Instructions', 'Method', 'Directions'],
-        ['Practical Tips', 'Outlook', 'Enjoy', 'Frequently Asked Questions', 'FAQ', 'Post Tags'],
+        INSTRUCTION_SECTION_NAMES,
+        INSTRUCTION_STOP_NAMES,
     )
 
     ingredients = _normalize_recipe_lines(ingredients_block)
@@ -526,9 +582,11 @@ def _extract_recipe_fields_from_article(article):
         'recipe_description': _extract_recipe_description(content),
         'ingredients': ingredients,
         'instructions': instructions,
+        'recipe_yield': '4 servings',
         'recipe_keywords': ", ".join(article.get('tags', [])) if article.get('tags') else article.get('slug', '').replace('-', ', '),
         'recipecategory': 'Dessert',
         'recipecuisine': 'International',
+        'author_name': 'El Mordjene Team',
     }
     return _normalize_recipe_fields(fallback)
 
@@ -593,9 +651,10 @@ def _parse_article_output(raw_text, intent=None):
                 logger.warning(f"   Failed to parse RECIPE_DATA JSON: {e}")
 
         recipe_like = _is_recipe_article(result, intent=intent)
-        if recipe_like and result.get("category", "").strip().lower() != "recipes":
-            logger.info("   Recipe structure detected; normalizing category to Recipes")
-            result["category"] = "Recipes"
+        if recipe_like and result.get("category", "").strip().lower() not in RECIPE_CATEGORY_NAMES:
+            normalized_category = "Recettes" if result.get("language") == "fr" else "Recipes"
+            logger.info(f"   Recipe structure detected; normalizing category to {normalized_category}")
+            result["category"] = normalized_category
 
         if not result["title"] or not result["content"]:
             logger.warning("Missing essential fields, attempting raw extraction...")
@@ -616,8 +675,16 @@ def _parse_article_output(raw_text, intent=None):
             if deterministic_fields:
                 logger.info("   Recovered recipe ACF fields from article body structure")
                 result["acf_fields"] = _merge_recipe_fields(result.get("acf_fields", {}), deterministic_fields)
-
         if recipe_like:
+            default_fields = {
+                "recipe_name": result.get("title", "").strip(),
+                "recipe_description": _extract_recipe_description(result.get("content", "")),
+                "recipe_keywords": ", ".join(result.get("tags", [])) if result.get("tags") else result.get("slug", "").replace("-", ", "),
+                "recipecategory": "Dessert",
+                "recipecuisine": "Algerian" if result.get("language") == "fr" else "International",
+                "author_name": "El Mordjene Team",
+            }
+            result["acf_fields"] = _merge_recipe_fields(result.get("acf_fields", {}), _normalize_recipe_fields(default_fields))
             acf_keys = sorted((result.get("acf_fields") or {}).keys())
             logger.info(f"   Recipe article detected with ACF keys: {acf_keys}")
 
