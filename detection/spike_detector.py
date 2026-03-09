@@ -1,5 +1,5 @@
 """
-Spike Detector — Aggregates stories from all sources, deduplicates,
+Spike Detector Ã¢â‚¬â€ Aggregates stories from all sources, deduplicates,
 calculates spike scores, and returns trending topics worth covering.
 
 INTELLIGENCE FEATURES (beyond FIFA app):
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from database.db import (
     get_connection, is_story_seen, add_story, record_keyword_mention,
-    get_keyword_baseline, is_topic_already_covered
+    get_keyword_baseline, is_topic_already_covered, get_recent_published_topics
 )
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,7 @@ def _calculate_spike_score(cluster_stories, conn):
         score += len(source_types) * 12
         factors.append(f"{len(source_types)} source types")
 
-    # Factor 3: Recency — stories from last 2 hours score higher
+    # Factor 3: Recency Ã¢â‚¬â€ stories from last 2 hours score higher
     now = datetime.utcnow()
     for story in cluster_stories:
         pub = story.get("published_at", now)
@@ -185,6 +185,23 @@ def _is_excluded(text):
             return True
     return False
 
+def _recent_topic_penalty(title, keyword, recent_topics):
+    """Down-rank over-covered topic families so discovery stays broader."""
+    title_lower = (title or "").lower()
+    keyword_lower = (keyword or "").lower()
+    penalty = 0
+
+    for recent_title, recent_keywords, _published_at in recent_topics:
+        haystack = f"{recent_title} {recent_keywords}".lower()
+        if keyword_lower and keyword_lower in haystack:
+            penalty += 6
+        elif title_lower and any(token in haystack for token in title_lower.split() if len(token) > 4):
+            penalty += 3
+
+    max_penalty = int(getattr(config, "RECENT_TOPIC_REPEAT_PENALTY", 12))
+    return min(penalty, max_penalty)
+
+
 
 def detect_spikes(all_stories, trends_data=None):
     """
@@ -254,6 +271,11 @@ def detect_spikes(all_stories, trends_data=None):
 
     # Cluster related stories
     clusters = _cluster_stories(new_stories)
+    recent_topics = get_recent_published_topics(
+        conn,
+        limit=int(getattr(config, "RECENT_TOPIC_REPEAT_WINDOW", 12))
+    )
+
 
     # Score each cluster
     trending_topics = []
@@ -264,7 +286,7 @@ def detect_spikes(all_stories, trends_data=None):
         if score >= min_score:
             best_story = max(cluster_stories_list, key=lambda s: len(s["title"]))
 
-            # INTELLIGENCE: Check if we've already published content on this topic
+            # INTELLIGENCE: Check if we have already published this topic family
             if getattr(config, "CHECK_EXISTING_CONTENT", True):
                 is_dup, dup_match, dup_score = is_topic_already_covered(
                     conn, best_story["title"],
@@ -272,10 +294,22 @@ def detect_spikes(all_stories, trends_data=None):
                 )
                 if is_dup:
                     logger.info(
-                        f"  ⏭️ Skipping duplicate topic: '{best_story['title'][:60]}' "
+                        f"  Skipping duplicate topic: '{best_story['title'][:60]}' "
                         f"(similar to '{dup_match[:60]}', score: {dup_score:.2f})"
                     )
                     continue
+
+            repeat_penalty = _recent_topic_penalty(
+                best_story["title"],
+                best_story.get("matched_keyword", ""),
+                recent_topics,
+            )
+            if repeat_penalty:
+                score = max(0, score - repeat_penalty)
+                factors.append(f"repeat penalty -{repeat_penalty}")
+                if score < min_score:
+                    continue
+
 
             trending_topics.append({
                 "topic": best_story["title"],
@@ -294,3 +328,4 @@ def detect_spikes(all_stories, trends_data=None):
     conn.close()
     logger.info(f"Spike Detector: Identified {len(trending_topics)} trending topics")
     return trending_topics
+

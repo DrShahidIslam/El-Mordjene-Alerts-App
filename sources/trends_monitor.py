@@ -1,5 +1,5 @@
 """
-Google Trends Monitor — Tracks rising search queries related to food, recipes, and desserts.
+Google Trends Monitor - Tracks rising search queries related to food, recipes, and desserts.
 """
 import logging
 import time
@@ -21,7 +21,7 @@ def _build_keyword_batches(keywords, batch_size=5):
 
 def fetch_trending_queries():
     """
-    Check Google Trends for rising interest in food/recipe keywords.
+    Check Google Trends for rising interest in food-related keywords.
     Returns a list of trend dicts with keyword, interest score, and rising status.
     """
     trends = []
@@ -36,15 +36,10 @@ def fetch_trending_queries():
         logger.error(f"Failed to initialize pytrends: {e}")
         return trends
 
-    # Core food/recipe keywords to check
-    core_keywords = [
-        "el mordjene", "dubai chocolate", "viral dessert",
-        "homemade chocolate", "candy making", "chocolate spread",
-        "tiktok recipe", "angel hair chocolate", "tamina recipe",
-        "food ban",
-    ]
+    core_keywords = list(getattr(config, "TRENDS_CORE_KEYWORDS", []))
+    batch_size = int(getattr(config, "TRENDS_KEYWORDS_PER_BATCH", 5))
 
-    for batch in _build_keyword_batches(core_keywords):
+    for batch in _build_keyword_batches(core_keywords, batch_size=batch_size):
         try:
             logger.info(f"Checking Google Trends for: {batch}")
             pytrends.build_payload(batch, cat=0, timeframe='now 7-d', geo=config.TRENDS_GEO)
@@ -57,10 +52,8 @@ def fetch_trending_queries():
                         if len(values) >= 2:
                             current = values[-1]
                             avg_overall = sum(values) / len(values)
-
                             is_rising = current > avg_overall * 1.5
 
-                            # Calculate trend velocity (how fast it's growing)
                             velocity = 0.0
                             if len(values) >= 4:
                                 recent_avg = sum(values[-3:]) / 3
@@ -81,8 +74,8 @@ def fetch_trending_queries():
 
                             if is_rising:
                                 logger.info(
-                                    f"  🔥 RISING: '{keyword}' — {current} vs avg {avg_overall:.0f} "
-                                    f"({current/max(avg_overall,1):.1f}x, velocity: {velocity:.2f})"
+                                    f"  Rising: '{keyword}' - {current} vs avg {avg_overall:.0f} "
+                                    f"({current / max(avg_overall, 1):.1f}x, velocity: {velocity:.2f})"
                                 )
 
             time.sleep(5)
@@ -92,8 +85,7 @@ def fetch_trending_queries():
             time.sleep(10)
             continue
 
-    # Check related rising queries for our core topics
-    for core_topic in ["el mordjene", "dubai chocolate", "viral dessert recipe"]:
+    for core_topic in getattr(config, "TRENDS_RELATED_TOPICS", []):
         try:
             pytrends.build_payload([core_topic], cat=0, timeframe='now 7-d', geo=config.TRENDS_GEO)
             related = pytrends.related_queries()
@@ -104,15 +96,9 @@ def fetch_trending_queries():
                     for _, row in rising_df.head(10).iterrows():
                         query = row.get("query", "")
                         value = row.get("value", 0)
-
-                        # Skip queries with excluded keywords
                         query_lower = query.lower()
-                        excluded = False
-                        for ex_kw in getattr(config, "EXCLUDE_KEYWORDS", []):
-                            if ex_kw.lower() in query_lower:
-                                excluded = True
-                                break
-                        if excluded:
+
+                        if any(ex_kw.lower() in query_lower for ex_kw in getattr(config, "EXCLUDE_KEYWORDS", [])):
                             continue
 
                         trends.append({
@@ -126,7 +112,7 @@ def fetch_trending_queries():
                             "source_type": "trends",
                             "recorded_at": datetime.utcnow(),
                         })
-                        logger.info(f"  📈 Related rising query: '{query}' (value: {value})")
+                        logger.info(f"  Related rising query: '{query}' (value: {value})")
 
             time.sleep(5)
 
@@ -138,7 +124,7 @@ def fetch_trending_queries():
 
 
 def get_realtime_trending():
-    """Fetch real-time trending searches and filter for food/recipe related topics."""
+    """Fetch real-time trending searches and filter for food-related topics."""
     realtime_trends = []
 
     try:
@@ -149,7 +135,6 @@ def get_realtime_trending():
         if trending is not None and not trending.empty:
             for _, row in trending.iterrows():
                 query = str(row[0]).lower()
-                # Check if this trending query is food/recipe related
                 for kw in config.ALL_KEYWORDS:
                     if kw.lower() in query or any(word in query for word in kw.lower().split()):
                         realtime_trends.append({
@@ -160,7 +145,7 @@ def get_realtime_trending():
                             "matched_keyword": kw,
                             "recorded_at": datetime.utcnow(),
                         })
-                        logger.info(f"  ⚡ Real-time trending: '{row[0]}' (matched: {kw})")
+                        logger.info(f"  Real-time trending: '{row[0]}' (matched: {kw})")
                         break
 
     except ImportError:
@@ -169,12 +154,3 @@ def get_realtime_trending():
         logger.warning(f"Real-time trending error: {e}")
 
     return realtime_trends
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    print("=== Interest Over Time ===")
-    trends = fetch_trending_queries()
-    for t in trends:
-        status = "🔥 RISING" if t["is_rising"] else "  normal"
-        print(f"  {status} | {t['keyword']}: {t['current_interest']} (avg: {t['avg_interest']}, velocity: {t['velocity']})")

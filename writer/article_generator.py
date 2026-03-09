@@ -257,13 +257,46 @@ def _normalize_recipe_fields(recipe_data):
     return {key: value for key, value in normalized.items() if value not in (None, "")}
 
 
+
+def _merge_recipe_fields(*field_sets):
+    merged = {}
+    for field_set in field_sets:
+        if not isinstance(field_set, dict):
+            continue
+        for key, value in field_set.items():
+            if value not in (None, ""):
+                merged[key] = value
+    return merged
+
+
+def _content_has_recipe_structure(content):
+    text = _content_to_line_text(content)
+    if not text:
+        return False
+
+    has_ingredients = bool(re.search(r'(?im)^(ingredients|ingredients list)\\s*:?\\s*$', text))
+    has_instructions = bool(re.search(r'(?im)^(instructions|method|directions|preparation)\\s*:?\\s*$', text))
+    return has_ingredients and has_instructions
+
 def _is_recipe_article(result, intent=None):
     if (intent or "").lower() == "recipe":
         return True
     category = str(result.get("category", "")).strip().lower()
     slug = str(result.get("slug", "")).strip().lower()
-    return category == "recipes" or "recipe" in slug
+    title = str(result.get("title", "")).strip().lower()
+    tags = " ".join(result.get("tags", [])).lower()
+    acf_fields = result.get("acf_fields", {}) or {}
+    content = result.get("content", "") or result.get("full_content", "")
+    recipe_markers = ["recipe", "how to make", "copycat", "homemade", "ingredients", "instructions"]
 
+    return (
+        category == "recipes"
+        or "recipe" in slug
+        or any(marker in title for marker in recipe_markers)
+        or any(marker in tags for marker in recipe_markers)
+        or bool(acf_fields.get("ingredients") or acf_fields.get("instructions"))
+        or _content_has_recipe_structure(content)
+    )
 
 def _recipe_fields_complete(acf_fields):
     if not isinstance(acf_fields, dict):
@@ -559,6 +592,11 @@ def _parse_article_output(raw_text, intent=None):
             except Exception as e:
                 logger.warning(f"   Failed to parse RECIPE_DATA JSON: {e}")
 
+        recipe_like = _is_recipe_article(result, intent=intent)
+        if recipe_like and result.get("category", "").strip().lower() != "recipes":
+            logger.info("   Recipe structure detected; normalizing category to Recipes")
+            result["category"] = "Recipes"
+
         if not result["title"] or not result["content"]:
             logger.warning("Missing essential fields, attempting raw extraction...")
             if not result["title"]:
@@ -568,18 +606,20 @@ def _parse_article_output(raw_text, intent=None):
                 result["content"] = _downgrade_h1_tags(raw_text)
                 result["full_content"] = result["content"]
 
-        if _is_recipe_article(result, intent=intent) and not _recipe_fields_complete(result["acf_fields"]):
+        if recipe_like and not _recipe_fields_complete(result["acf_fields"]):
             fallback_fields = _extract_recipe_fields_via_fallback(result)
             if fallback_fields:
-                result["acf_fields"] = fallback_fields
+                result["acf_fields"] = _merge_recipe_fields(result["acf_fields"], fallback_fields)
 
-        if _is_recipe_article(result, intent=intent) and not _recipe_fields_complete(result["acf_fields"]):
+        if recipe_like and not _recipe_fields_complete(result["acf_fields"]):
             deterministic_fields = _extract_recipe_fields_from_article(result)
             if deterministic_fields:
                 logger.info("   Recovered recipe ACF fields from article body structure")
-                merged_fields = dict(result.get("acf_fields", {}))
-                merged_fields.update(deterministic_fields)
-                result["acf_fields"] = merged_fields
+                result["acf_fields"] = _merge_recipe_fields(result.get("acf_fields", {}), deterministic_fields)
+
+        if recipe_like:
+            acf_keys = sorted((result.get("acf_fields") or {}).keys())
+            logger.info(f"   Recipe article detected with ACF keys: {acf_keys}")
 
         return result
 

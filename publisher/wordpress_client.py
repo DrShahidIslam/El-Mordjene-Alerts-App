@@ -1,5 +1,5 @@
 """
-WordPress Client — Handles all WordPress REST API interactions:
+WordPress Client â€” Handles all WordPress REST API interactions:
 creating posts, uploading media, setting categories/tags,
 and injecting RankMath SEO fields.
 """
@@ -41,6 +41,27 @@ def _safe_json(response, context_name=""):
         text = response.text[:200] if response.text else "<empty body>"
         logger.error(f"  {context_name} expected JSON but got HTTP {response.status_code}: {text}")
         raise ValueError(f"WP non-JSON response ({response.status_code}) on {context_name}: {text}")
+
+
+def _prepare_acf_payload(article, media_id=None):
+    acf_data = dict(article.get("acf_fields", {}) or {})
+    if not acf_data:
+        return {}
+
+    if media_id:
+        acf_data["recipe_image"] = media_id
+
+    normalized = {}
+    for key, value in acf_data.items():
+        if value in (None, ""):
+            continue
+        if isinstance(value, list):
+            normalized[key] = "\n".join(str(item).strip() for item in value if str(item).strip())
+        else:
+            normalized[key] = value
+
+    logger.info(f"  Prepared ACF payload keys: {sorted(normalized.keys())}")
+    return normalized
 
 
 def create_post(article, featured_image_path=None, status=None):
@@ -95,12 +116,8 @@ def create_post(article, featured_image_path=None, status=None):
         post_data["featured_media"] = media_id
 
     # Add ACF Fields if we have them
-    acf_data = article.get("acf_fields", {})
+    acf_data = _prepare_acf_payload(article, media_id=media_id)
     if acf_data:
-        # If media uploaded successfully, set the recipe_image field to the image ID so ACF handles it
-        if media_id:
-            acf_data["recipe_image"] = media_id
-            
         post_data["acf"] = acf_data
 
     try:
@@ -122,6 +139,8 @@ def create_post(article, featured_image_path=None, status=None):
 
                 _set_rankmath_meta(post_id, article)
 
+                if acf_data:
+                    logger.info(f"  REST ACF payload submitted with {len(acf_data)} fields")
                 return {
                     "post_id": post_id,
                     "post_url": post_url,
@@ -170,9 +189,12 @@ def _publish_via_webhook(article, featured_image_path=None, status=None):
         "language": article.get("language", "en"),
     }
 
-    acf_data = article.get("acf_fields", {})
+    acf_data = _prepare_acf_payload(article)
     if acf_data:
         payload["acf"] = acf_data
+        payload["acf_fields"] = acf_data
+        payload["recipe_fields"] = acf_data
+        payload["is_recipe"] = True
 
     if featured_image_path and os.path.exists(featured_image_path):
         with open(featured_image_path, "rb") as f:
@@ -193,6 +215,8 @@ def _publish_via_webhook(article, featured_image_path=None, status=None):
                 data = r.json()
                 if data.get("success"):
                     logger.info(f"  Post created via webhook (ID: {data.get('post_id')})")
+                    if acf_data:
+                        logger.info(f"  Webhook ACF payload submitted with {len(acf_data)} fields")
                     return {
                         "post_id": data.get("post_id"),
                         "post_url": data.get("post_url", ""),
@@ -207,7 +231,7 @@ def _publish_via_webhook(article, featured_image_path=None, status=None):
                 continue
             err = f"HTTP {r.status_code}"
             if r.text and len(r.text) < 200:
-                err += f" — {r.text.strip()}"
+                err += f" â€” {r.text.strip()}"
             logger.error(f"  Webhook failed: {err}")
             LAST_PUBLISH_ERROR = err
             return None

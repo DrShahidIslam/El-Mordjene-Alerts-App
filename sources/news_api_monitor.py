@@ -1,6 +1,5 @@
 """
-NewsAPI Monitor — Fetches food/recipe/dessert headlines from NewsAPI.
-Uses the free tier (100 requests/day).
+NewsAPI Monitor - Fetches food, sweets, and confectionery headlines from NewsAPI.
 """
 import logging
 import hashlib
@@ -22,7 +21,7 @@ def _hash_story(title, url):
 
 def fetch_news_headlines():
     """
-    Fetch food/recipe related headlines from NewsAPI.
+    Fetch food-related headlines from NewsAPI.
     Returns a list of story dicts.
     """
     stories = []
@@ -41,21 +40,7 @@ def fetch_news_headlines():
         logger.error(f"Failed to initialize NewsAPI client: {e}")
         return stories
 
-    # Search queries for food/recipe news (English and French)
-    search_queries = [
-        "dubai chocolate recipe",
-        "viral dessert recipe",
-        "el mordjene",
-        "homemade chocolate",
-        "food ban 2025",
-        "tiktok recipe trend",
-        "candy making",
-        "recette algérienne",
-        "pâtisserie algérienne",
-        "recette virale",
-    ]
-
-    for query in search_queries:
+    for query in getattr(config, "NEWSAPI_SEARCH_QUERIES", []):
         try:
             logger.info(f"NewsAPI: Searching for '{query}'")
             from_date = (datetime.utcnow() - timedelta(hours=48)).strftime("%Y-%m-%d")
@@ -63,8 +48,9 @@ def fetch_news_headlines():
             results = newsapi.get_everything(
                 q=query,
                 sort_by="publishedAt",
+                language="en",
                 from_param=from_date,
-                page_size=10
+                page_size=10,
             )
 
             if results.get("status") == "ok":
@@ -73,13 +59,11 @@ def fetch_news_headlines():
                     if not title or title == "[Removed]":
                         continue
 
-                    # Check against exclusion keywords
                     combined = f"{title} {article.get('description', '')}".lower()
-                    excluded = any(kw.lower() in combined for kw in config.EXCLUDE_KEYWORDS)
-                    if excluded:
+                    if any(kw.lower() in combined for kw in config.EXCLUDE_KEYWORDS):
                         continue
 
-                    story = {
+                    stories.append({
                         "title": title.strip(),
                         "summary": (article.get("description") or "").strip()[:500],
                         "url": article.get("url", ""),
@@ -89,14 +73,12 @@ def fetch_news_headlines():
                         "published_at": _parse_date(article.get("publishedAt")),
                         "story_hash": _hash_story(title, article.get("url", "")),
                         "image_url": article.get("urlToImage", ""),
-                    }
-                    stories.append(story)
+                    })
 
         except Exception as e:
             logger.error(f"NewsAPI error for '{query}': {e}")
             continue
 
-    # Deduplicate
     seen_hashes = set()
     unique = []
     for story in stories:
@@ -116,12 +98,3 @@ def _parse_date(date_str):
         return datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return datetime.utcnow()
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
-    stories = fetch_news_headlines()
-    for s in stories[:15]:
-        print(f"[{s['source']}] {s['title']}")
-        print(f"  {s['summary'][:120]}...")
-        print()

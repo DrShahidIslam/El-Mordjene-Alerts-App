@@ -151,6 +151,8 @@ SEO, AEO, AND GEO REQUIREMENTS:
 - Structure the article for both search engines and answer engines: fast answer first, then supporting detail.
 - Use clear entities, product names, and context so AI/search systems can identify what the page is about.
 - Use close keyword variations naturally, but keep the focus keyword as the main phrase.
+- Expand into adjacent entities, ingredients, cuisines, product types, and cultural context when the sources support it.
+- Do not force El Mordjene, Dubai chocolate, or angel hair chocolate references unless they are central to this specific topic.
 - Avoid keyword stuffing, filler intros, and generic conclusions.
 
 FAQ AND SCHEMA RULES:
