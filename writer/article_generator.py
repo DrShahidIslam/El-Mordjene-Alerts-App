@@ -324,6 +324,129 @@ def _merge_recipe_fields(*field_sets):
                 merged[key] = value
     return merged
 
+def _minutes_to_iso(value):
+    if value in (None, ""):
+        return ""
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if minutes <= 0:
+        return ""
+    return f"PT{minutes}M"
+
+
+def _split_lines(value):
+    if value in (None, ""):
+        return []
+    lines = []
+    for raw_line in str(value).splitlines():
+        line = raw_line.strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+def _is_url(value):
+    if not value:
+        return False
+    val = str(value).strip().lower()
+    return val.startswith("http://") or val.startswith("https://")
+
+
+def _build_recipe_schema_from_acf(article):
+    acf_fields = article.get("acf_fields", {}) or {}
+    recipe_name = (acf_fields.get("recipe_name") or article.get("title", "")).strip()
+    ingredients = _split_lines(acf_fields.get("ingredients"))
+    instructions = _split_lines(acf_fields.get("instructions"))
+    if not recipe_name or not ingredients or not instructions:
+        return {}
+
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "Recipe",
+        "name": recipe_name,
+    }
+
+    description = (acf_fields.get("recipe_description") or "").strip()
+    if description:
+        schema["description"] = description
+
+    recipe_yield = (acf_fields.get("recipe_yield") or "").strip()
+    if recipe_yield:
+        schema["recipeYield"] = recipe_yield
+
+    prep_time = _minutes_to_iso(acf_fields.get("prep_time_minutes"))
+    cook_time = _minutes_to_iso(acf_fields.get("cook_time_minutes"))
+    total_time = _minutes_to_iso(acf_fields.get("total_time_minutes"))
+    if prep_time:
+        schema["prepTime"] = prep_time
+    if cook_time:
+        schema["cookTime"] = cook_time
+    if total_time:
+        schema["totalTime"] = total_time
+
+    schema["recipeIngredient"] = ingredients
+    schema["recipeInstructions"] = [
+        {"@type": "HowToStep", "text": step}
+        for step in instructions
+    ]
+
+    recipe_keywords = (acf_fields.get("recipe_keywords") or "").strip()
+    if recipe_keywords:
+        schema["keywords"] = recipe_keywords
+
+    recipe_cuisine = (acf_fields.get("recipecuisine") or "").strip()
+    if recipe_cuisine:
+        schema["recipeCuisine"] = recipe_cuisine
+
+    recipe_category = (acf_fields.get("recipecategory") or "").strip()
+    if recipe_category:
+        schema["recipeCategory"] = recipe_category
+
+    author_name = (acf_fields.get("author_name") or "").strip()
+    if author_name:
+        schema["author"] = {"@type": "Person", "name": author_name}
+
+    nutrition_calories = (acf_fields.get("nutrition_calories") or "").strip()
+    if nutrition_calories:
+        schema["nutrition"] = {
+            "@type": "NutritionInformation",
+            "calories": nutrition_calories,
+        }
+
+    image_value = acf_fields.get("recipe_image")
+    if _is_url(image_value):
+        schema["image"] = [str(image_value).strip()]
+
+    video_url = (acf_fields.get("video_url") or "").strip()
+    if video_url:
+        video_obj = {"@type": "VideoObject", "contentUrl": video_url}
+        upload_date = (acf_fields.get("video_upload_date") or "").strip()
+        if upload_date:
+            video_obj["uploadDate"] = upload_date
+        schema["video"] = video_obj
+
+    return schema
+
+
+def _attach_recipe_schema_fields(article):
+    fields = getattr(config, "ACF_RECIPE_SCHEMA_FIELDS", []) or []
+    if isinstance(fields, str):
+        fields = [fields]
+    fields = [field for field in fields if field]
+    if not fields:
+        return
+
+    schema = _build_recipe_schema_from_acf(article)
+    if not schema:
+        return
+
+    schema_json = json.dumps(schema, ensure_ascii=True)
+    acf_fields = article.setdefault("acf_fields", {})
+    for field in fields:
+        acf_fields[field] = schema_json
+
 
 def _content_has_recipe_structure(content):
     text = _content_to_line_text(content)
@@ -685,6 +808,7 @@ def _parse_article_output(raw_text, intent=None):
                 "author_name": "El Mordjene Team",
             }
             result["acf_fields"] = _merge_recipe_fields(result.get("acf_fields", {}), _normalize_recipe_fields(default_fields))
+            _attach_recipe_schema_fields(result)
             acf_keys = sorted((result.get("acf_fields") or {}).keys())
             logger.info(f"   Recipe article detected with ACF keys: {acf_keys}")
 
@@ -779,6 +903,9 @@ def generate_article(topic, source_urls=None):
         logger.error("   Failed to parse Gemini output")
 
     return article
+
+
+
 
 
 

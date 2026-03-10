@@ -26,6 +26,16 @@ AUTH = HTTPBasicAuth(config.WP_USERNAME, config.WP_APP_PASSWORD)
 TIMEOUT = 30
 RETRY_DELAY = 5
 RETRY_403_DELAY = 4
+RECIPE_CATEGORY_NAMES = {"recipes", "recettes"}
+RECIPE_TITLE_MARKERS = [
+    "recipe",
+    "recette",
+    "how to make",
+    "ingredients",
+    "instructions",
+    "homemade",
+    "copycat",
+]
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; ElMordjeneAgent/1.0; +https://el-mordjene.info)",
     "Referer": f"{config.WP_URL}/",
@@ -41,6 +51,41 @@ def _safe_json(response, context_name=""):
         text = response.text[:200] if response.text else "<empty body>"
         logger.error(f"  {context_name} expected JSON but got HTTP {response.status_code}: {text}")
         raise ValueError(f"WP non-JSON response ({response.status_code}) on {context_name}: {text}")
+
+
+
+def _is_recipe_article(article):
+    if not isinstance(article, dict):
+        return False
+    if str(article.get("intent", "")).strip().lower() == "recipe":
+        return True
+    category = str(article.get("category", "")).strip().lower()
+    if category in RECIPE_CATEGORY_NAMES:
+        return True
+    title = str(article.get("title", "")).strip().lower()
+    slug = str(article.get("slug", "")).strip().lower()
+    tags = " ".join(article.get("tags", [])).strip().lower()
+    if any(marker in title for marker in RECIPE_TITLE_MARKERS):
+        return True
+    if any(marker in slug for marker in RECIPE_TITLE_MARKERS):
+        return True
+    if any(marker in tags for marker in RECIPE_TITLE_MARKERS):
+        return True
+    acf_fields = article.get("acf_fields", {}) or {}
+    if acf_fields.get("ingredients") or acf_fields.get("instructions") or acf_fields.get("recipe_name"):
+        return True
+    return False
+
+
+def _force_recipe_category(article):
+    if not _is_recipe_article(article):
+        return
+    language = str(article.get("language", "en")).strip().lower()
+    if language == "fr":
+        category_name = config.WP_RECIPE_CATEGORY_FR
+    else:
+        category_name = config.WP_RECIPE_CATEGORY_EN
+    article["category"] = category_name
 
 
 def _prepare_acf_payload(article, media_id=None):
@@ -70,6 +115,7 @@ def create_post(article, featured_image_path=None, status=None):
     If WP_PUBLISH_WEBHOOK_URL and WP_PUBLISH_SECRET are set, publishes via webhook.
     Otherwise uses REST API.
     """
+    _force_recipe_category(article)
     if status is None:
         status = config.WP_DEFAULT_STATUS
 
@@ -490,3 +536,13 @@ if __name__ == "__main__":
         print("WordPress connection successful!")
     else:
         print("WordPress connection failed!")
+
+
+
+
+
+
+
+
+
+

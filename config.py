@@ -21,6 +21,9 @@ WP_USERNAME = os.getenv("WP_USERNAME")
 WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
 WP_PUBLISH_WEBHOOK_URL = os.getenv("WP_PUBLISH_WEBHOOK_URL", "").strip()
 WP_PUBLISH_SECRET = os.getenv("WP_PUBLISH_SECRET", "").strip()
+WP_RECIPE_CATEGORY_EN = os.getenv("WP_RECIPE_CATEGORY_EN", "Recipes - Recettes").strip() or "Recipes - Recettes"
+WP_RECIPE_CATEGORY_FR = os.getenv("WP_RECIPE_CATEGORY_FR", "Recipes - Recettes FR").strip() or "Recipes - Recettes FR"
+ACF_RECIPE_SCHEMA_FIELDS = [s.strip() for s in os.getenv("ACF_RECIPE_SCHEMA_FIELDS", "recipe_schema_json").split(",") if s.strip()]
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 
@@ -205,3 +208,4 @@ RECENT_TOPIC_REPEAT_PENALTY = 12
 
 LOG_FILE = "agent.log"
 LOG_LEVEL = "INFO"
+

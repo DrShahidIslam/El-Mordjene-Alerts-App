@@ -75,7 +75,7 @@ def _pick_layout_variant(topic_title, matched_keyword):
 
 def _intent_guidance(intent):
     intent_map = {
-        "recipe": "Focus on clear steps, ingredient substitutions, and practical tips. Keep claims concrete.",
+        "recipe": "Write a real recipe with clear ingredients, steps, timings, serving yield, and practical tips. Keep claims concrete.",
         "news": "Focus on what changed, why it matters now, and cite source-backed facts with caution language.",
         "buyer": "Focus on availability, authenticity checks, pricing caveats, and decision criteria.",
         "explainer": "Focus on definitions, context, misconceptions, and concise answers.",
@@ -89,6 +89,7 @@ def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="
     """
     Build the master SEO prompt for Gemini article generation.
     """
+    is_recipe = (intent or "").strip().lower() == "recipe"
     sources_block = ""
     for i, src in enumerate(source_texts[:5], 1):
         sources_block += f"""
@@ -103,6 +104,20 @@ def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="
 
     variant = _pick_layout_variant(topic_title, matched_keyword)
     outline = "\n".join(f"  - {item}" for item in variant["outline"])
+    if is_recipe:
+        variant = {
+            "name": "Recipe Format",
+            "outline": [
+                "Short hook and quick summary",
+                "Recipe snapshot (yield, times, key notes)",
+                "Ingredients list",
+                "Step-by-step instructions",
+                "Tips, substitutions, and variations",
+                "Storage and make-ahead guidance",
+                "Serving suggestions and brief FAQ if useful",
+            ],
+        }
+        outline = "\n".join(f"  - {item}" for item in variant["outline"])
 
     prompt = f"""You are an expert food journalist and recipe writer for el-mordjene.info.
 Write one complete, publish-ready article with high factual reliability and high user value.
@@ -142,6 +157,14 @@ STYLE REQUIREMENTS:
 - Begin with a strong 2-3 sentence hook that matches search intent and gives readers a reason to continue.
 - In the first 120 words, give a direct answer or clear summary before expanding into details.
 - The article body must not repeat the exact title as a visible heading.
+
+RECIPE ARTICLE RULES (ONLY IF THIS IS A RECIPE):
+- Use a full recipe structure with clear sections for Ingredients and Instructions.
+- Present ingredients as a <ul><li> list, and instructions as an <ol><li> list.
+- Include a concise "Recipe Snapshot" section with yield and prep/cook/total time.
+- Provide substitutions, variations, and storage guidance when supported by sources.
+- Do not invent nutrition facts or timings if they are not supported by sources.
+- Category MUST be "Recipes" (or "Recettes" if the output language is French).
 
 SEO, AEO, AND GEO REQUIREMENTS:
 - Treat PRIMARY KEYWORD as the focus keyword for the article.
@@ -236,4 +259,7 @@ Exclusions:
 - No cluttered or messy backgrounds"""
 
     return prompt
+
+
+
 
