@@ -82,10 +82,11 @@ def _force_recipe_category(article):
         return
     language = str(article.get("language", "en")).strip().lower()
     if language == "fr":
-        category_name = config.WP_RECIPE_CATEGORY_FR
+        article["category"] = config.WP_RECIPE_CATEGORY_FR
+        article["category_slug"] = config.WP_RECIPE_CATEGORY_SLUG_FR
     else:
-        category_name = config.WP_RECIPE_CATEGORY_EN
-    article["category"] = category_name
+        article["category"] = config.WP_RECIPE_CATEGORY_EN
+        article["category_slug"] = config.WP_RECIPE_CATEGORY_SLUG_EN
 
 
 def _prepare_acf_payload(article, media_id=None):
@@ -136,7 +137,9 @@ def create_post(article, featured_image_path=None, status=None):
         media_id = upload_media(featured_image_path, article.get("title", ""))
 
     # Step 2: Get or create category
-    category_id = get_or_create_category(article.get("category", config.WP_DEFAULT_CATEGORY))
+    category_slug = article.get("category_slug", "")
+    category_name = article.get("category", config.WP_DEFAULT_CATEGORY)
+    category_id = get_or_create_category(category_name, slug=category_slug)
 
     # Step 3: Get or create tags
     tag_ids = []
@@ -340,19 +343,46 @@ def upload_media(file_path, title=""):
         return None
 
 
-def get_or_create_category(name):
-    """Get category ID by name, creating it if it doesn't exist."""
+def get_or_create_category(name, slug=""):
+    """Get category ID by name (or slug), creating it only for non-recipe categories."""
     try:
+        # Try slug-based lookup first (most reliable for recipe categories)
+        if slug:
+            response = requests.get(
+                f"{API_BASE}/categories",
+                params={"slug": slug},
+                auth=AUTH, headers=HEADERS, timeout=TIMEOUT
+            )
+            if response.status_code == 200:
+                cats = _safe_json(response, "Get Category by Slug")
+                if cats:
+                    cat_id = cats[0]["id"]
+                    logger.info(f"  Found category by slug '{slug}' (ID: {cat_id}, Name: '{cats[0]['name']}')")
+                    return cat_id
+
+        # Fallback: search by name
         response = requests.get(
             f"{API_BASE}/categories",
-            params={"search": name, "per_page": 5},
+            params={"search": name, "per_page": 10},
             auth=AUTH, headers=HEADERS, timeout=TIMEOUT
         )
         if response.status_code == 200:
             for cat in _safe_json(response, "Get Category"):
                 if cat["name"].lower() == name.lower():
+                    logger.info(f"  Found category by name '{name}' (ID: {cat['id']})")
+                    return cat["id"]
+                # Also check slug match as secondary fallback
+                if slug and cat.get("slug", "").lower() == slug.lower():
+                    logger.info(f"  Found category by slug match '{slug}' (ID: {cat['id']}, Name: '{cat['name']}')")
                     return cat["id"]
 
+        # For recipe categories, do NOT auto-create — it causes ACF schema issues
+        is_recipe_cat = name.lower() in RECIPE_CATEGORY_NAMES
+        if is_recipe_cat:
+            logger.error(f"  Recipe category '{name}' (slug: '{slug}') NOT FOUND in WordPress — skipping creation to avoid duplicates")
+            return None
+
+        # For non-recipe categories, create as before
         response = requests.post(
             f"{API_BASE}/categories",
             json={"name": name},

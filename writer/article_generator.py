@@ -775,7 +775,7 @@ def _parse_article_output(raw_text, intent=None):
 
         recipe_like = _is_recipe_article(result, intent=intent)
         if recipe_like and result.get("category", "").strip().lower() not in RECIPE_CATEGORY_NAMES:
-            normalized_category = "Recettes" if result.get("language") == "fr" else "Recipes"
+            normalized_category = config.WP_RECIPE_CATEGORY_FR if result.get("language") == "fr" else config.WP_RECIPE_CATEGORY_EN
             logger.info(f"   Recipe structure detected; normalizing category to {normalized_category}")
             result["category"] = normalized_category
 

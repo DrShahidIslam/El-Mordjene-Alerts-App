@@ -1,4 +1,4 @@
-﻿"""
+"""
 Review helper checks for warning-first editorial QA.
 """
 import re
@@ -41,7 +41,7 @@ def schema_presence(article):
     content = article.get("content", "")
     has_faq = bool(re.search(r'"@type"\s*:\s*"FAQPage"', content, flags=re.IGNORECASE))
     has_recipe = bool(re.search(r'"@type"\s*:\s*"Recipe"', content, flags=re.IGNORECASE))
-    is_recipe_like = (article.get("category", "").lower() == "recipes") or bool((article.get("acf_fields") or {}).get("ingredients"))
+    is_recipe_like = (article.get("category", "").lower() in {"recipes", "recettes"}) or bool((article.get("acf_fields") or {}).get("ingredients"))
 
     status = []
     status.append("FAQ schema: yes" if has_faq else "FAQ schema: no")
