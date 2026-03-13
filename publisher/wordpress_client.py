@@ -466,7 +466,12 @@ def update_post_status(post_id, status="publish"):
         )
         if response.status_code == 200:
             try:
-                return response.json().get("link")
+                data = response.json()
+                return {
+                    "link": data.get("link"),
+                    "title": data.get("title", {}).get("rendered", ""),
+                    "slug": data.get("slug", "")
+                }
             except (ValueError, KeyError):
                 return None
         logger.error(f"Failed to update post status: HTTP {response.status_code}")
@@ -501,7 +506,11 @@ def _update_status_via_webhook(post_id, status="publish"):
             except ValueError:
                 return None
             if data.get("success"):
-                return data.get("post_url")
+                return {
+                    "link": data.get("post_url"),
+                    "title": data.get("title", ""), # Assuming webhook returns title 
+                    "slug": data.get("slug", "")   # and slug in success payload
+                }
         return None
     except Exception as e:
         logger.warning(f"Webhook status update failed: {e}")

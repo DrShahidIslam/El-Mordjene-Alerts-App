@@ -4,25 +4,21 @@ Tailored for el-mordjene.info: food, recipes, chocolate, desserts, spreads.
 """
 import hashlib
 
-# Real internal links only - from existing published pages on el-mordjene.info
-INTERNAL_LINKS = {
-    "home": {"url": "https://el-mordjene.info/", "anchor": "El-Mordjene.info"},
-    "what_is": {"url": "https://el-mordjene.info/what-is-el-mordjene/", "anchor": "What is El Mordjene?"},
-    "banned": {"url": "https://el-mordjene.info/why-is-el-mordjene-banned/", "anchor": "Why is El Mordjene banned?"},
-    "ingredients": {"url": "https://el-mordjene.info/el-mordjene-ingredients/", "anchor": "El Mordjene calories and ingredients"},
-    "homemade_spread": {"url": "https://el-mordjene.info/how-to-make-el-mordjene-spread/", "anchor": "homemade El Mordjene spread recipe"},
-    "cebon": {"url": "https://el-mordjene.info/cebon/", "anchor": "Cebon: the company behind El Mordjene"},
-    "candy_making": {"url": "https://el-mordjene.info/candy-making-home/", "anchor": "candy making at home"},
-    "dubai_strawberries": {"url": "https://el-mordjene.info/dubai-chocolate-strawberries/", "anchor": "Dubai Chocolate Strawberries recipe"},
-    "chocolate_spread": {"url": "https://el-mordjene.info/chocolate-spread-recipes/", "anchor": "chocolate spread recipes from scratch"},
-    "homemade_chocolate": {"url": "https://el-mordjene.info/homemade-chocolate-recipes/", "anchor": "homemade chocolate recipes"},
-    "kinder_bueno": {"url": "https://el-mordjene.info/kinder-bueno-spread/", "anchor": "Kinder Bueno spread alternatives"},
-    "tamina": {"url": "https://el-mordjene.info/tamina-algerian-postpartum-recipe/", "anchor": "Tamina: ancient Algerian superfood"},
-    "banned_snacks": {"url": "https://el-mordjene.info/2027-banned-snacks-list-red-40-update/", "anchor": "banned snacks list and Red 40 update"},
-    "american_snacks_banned": {"url": "https://el-mordjene.info/american-snacks-banned-in-europe/", "anchor": "American snacks banned in Europe"},
-    "tiktok": {"url": "https://el-mordjene.info/el-mordjene-tiktok/", "anchor": "El Mordjene on TikTok"},
-}
+import json
+import os
 
+# Base directory
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+PUBLISHED_POSTS_PATH = os.path.join(BASE_DIR, "published_posts.json")
+
+def _load_internal_links():
+    try:
+        with open(PUBLISHED_POSTS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+INTERNAL_LINKS = _load_internal_links()
 
 def _pick_layout_variant(topic_title, matched_keyword):
     variants = [
@@ -99,7 +95,7 @@ def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="
 
     links_suggestion = "\n".join(
         f"  - [{info['anchor']}]({info['url']})"
-        for info in INTERNAL_LINKS.values()
+        for info in _load_internal_links().values()
     )
 
     variant = _pick_layout_variant(topic_title, matched_keyword)
@@ -191,6 +187,12 @@ INTERNAL LINKING RULES:
 
 Allowed internal links:
 {links_suggestion}
+
+EXTERNAL LINKING RULES:
+- Include exactly ONE high-quality, high-authority external link (e.g., to a reputable news source, official government site, or recognized culinary authority).
+- The external link must be highly relevant to the topic.
+- Format the external link to open in a new tab: <a href="..." target="_blank" rel="noopener noreferrer">...</a>
+
 
 RECIPE DATA REQUIREMENTS:
 If this is a real recipe article, output a strict JSON object with all recipe fields filled as completely as possible from the article and source material. If not, output {{}}.

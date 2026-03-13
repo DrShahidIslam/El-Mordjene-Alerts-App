@@ -60,6 +60,32 @@ logger = logging.getLogger("agent")
 
 #  Global State 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "agent_state.json")
+PUBLISHED_POSTS_FILE = os.path.join(os.path.dirname(__file__), "published_posts.json")
+
+def append_latest_published_post(title, slug, url):
+    """Append a newly published article to the internal links registry."""
+    if not title or not slug or not url:
+        return
+        
+    posts = {}
+    if os.path.exists(PUBLISHED_POSTS_FILE):
+        try:
+            with open(PUBLISHED_POSTS_FILE, "r", encoding="utf-8") as f:
+                posts = json.load(f)
+        except Exception as e:
+            logger.warning(f"Could not load {PUBLISHED_POSTS_FILE}: {e}")
+            
+    posts[slug] = {
+        "url": url,
+        "anchor": title
+    }
+    
+    try:
+        with open(PUBLISHED_POSTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(posts, f, indent=4, ensure_ascii=False)
+        logger.info(f"Appended '{title}' to internal links registry.")
+    except Exception as e:
+        logger.error(f"Failed to save {PUBLISHED_POSTS_FILE}: {e}")
 
 
 def _load_state():
@@ -294,9 +320,15 @@ def _handle_callback(callback, state):
         post_id = data.replace("publish_draft_", "")
         try:
             post_id = int(post_id)
-            url = update_post_status(post_id, "publish")
-            if url:
+            publish_result = update_post_status(post_id, "publish")
+            if publish_result and isinstance(publish_result, dict):
+                url = publish_result.get("link")
+                title = publish_result.get("title", f"Article {post_id}")
+                slug = publish_result.get("slug", f"post-{post_id}")
+                append_latest_published_post(title, slug, url)
                 send_simple_message(f" Post published live!\n{url}")
+            elif publish_result and isinstance(publish_result, str):
+                send_simple_message(f" Post published live!\n{publish_result}")
             else:
                 send_simple_message(f" Failed to publish post {post_id}")
         except Exception as e:
@@ -409,6 +441,9 @@ def _handle_approve(state, status="draft"):
             ",".join(article.get("tags", []))
         )
         conn.close()
+        
+        if status == "publish":
+            append_latest_published_post(article.get("title", ""), article.get("slug", ""), post_url)
 
         send_publish_confirmation(post_url, article["title"], post_id=post_id, status=status)
 
