@@ -125,14 +125,76 @@ def _infer_intent(topic):
         return "buyer"
     if any(k in txt for k in ["ban", "recall", "news", "update", "lawsuit"]):
         return "news"
-    if any(k in txt for k in ["trend", "rising", "viral", "tiktok", "spike"]):
+    if any(k in txt for k in ["viral", "tiktok"]):
         return "trend"
     return "explainer"
 
 
-def _search_news_for_trend(keyword):
-    """Search Google News RSS and NewsAPI to find background context for a trending keyword."""
+def _normalize_writing_topic(topic_title):
+    topic_title = (topic_title or "").strip()
+    if topic_title.lower().startswith("rising search:"):
+        return topic_title.split(":", 1)[1].strip()
+    return topic_title
+
+
+def _build_topic_expansion_queries(topic, intent):
+    base_topic = _normalize_writing_topic(topic.get("topic", ""))
+    matched_keyword = (topic.get("matched_keyword") or "").strip()
+    story_titles = [(s.get("title") or "").strip() for s in (topic.get("stories") or [])[:4]]
+
+    candidates = []
+    for value in [matched_keyword, base_topic, *story_titles]:
+        value = value.strip()
+        if value and value not in candidates:
+            candidates.append(value)
+
+    expanded = []
+    for value in candidates:
+        expanded.append(value)
+        if intent == "recipe":
+            expanded.extend([
+                f"{value} recipe",
+                f"{value} ingredients",
+                f"how to make {value}",
+            ])
+        elif intent == "buyer":
+            expanded.extend([
+                f"{value} where to buy",
+                f"{value} price",
+                f"{value} availability",
+            ])
+        elif intent == "news":
+            expanded.extend([
+                f"{value} official statement",
+                f"{value} recall",
+                f"{value} update",
+            ])
+        else:
+            expanded.extend([
+                f"{value} ingredients",
+                f"{value} recipe",
+                f"{value} guide",
+                f"{value} review",
+            ])
+
+    deduped = []
+    seen = set()
+    limit = int(getattr(config, "TREND_DISCOVERY_MAX_QUERIES", 6))
+    for query in expanded:
+        key = query.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(query.strip())
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _search_news_for_trend(keyword, days=None):
+    """Search Google News RSS and NewsAPI to find background context for a topic."""
     urls = []
+    days = int(days or getattr(config, "NEWS_EXPANSION_DAYS", 7))
 
     try:
         import feedparser
@@ -141,7 +203,7 @@ def _search_news_for_trend(keyword):
         encoded_kw = urllib.parse.quote(keyword)
         rss_url = f"https://news.google.com/rss/search?q={encoded_kw}&hl=en-US&gl=US&ceid=US:en"
         feed = feedparser.parse(rss_url)
-        for entry in feed.entries[:3]:
+        for entry in feed.entries[:6]:
             if entry.link and entry.link not in urls:
                 urls.append(entry.link)
     except Exception as e:
@@ -153,16 +215,16 @@ def _search_news_for_trend(keyword):
             from newsapi import NewsApiClient
 
             newsapi = NewsApiClient(api_key=config.NEWS_API_KEY)
-            from_date = (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d")
+            from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
             results = newsapi.get_everything(
                 q=keyword,
                 language="en",
                 sort_by="relevancy",
                 from_param=from_date,
-                page_size=5,
+                page_size=8,
             )
             if results.get("status") == "ok":
-                for article in results.get("articles", [])[:3]:
+                for article in results.get("articles", [])[:6]:
                     url = article.get("url")
                     if url and url not in urls:
                         urls.append(url)
@@ -170,6 +232,31 @@ def _search_news_for_trend(keyword):
             logger.warning(f"Failed to fetch NewsAPI for trend: {e}")
 
     return urls
+
+
+def _discover_supporting_urls(topic, intent, source_urls):
+    """Expand thin alerts into richer source sets before generation."""
+    discovered = []
+    seen = set(u for u in source_urls if u)
+    queries = _build_topic_expansion_queries(topic, intent)
+
+    for query in queries:
+        try:
+            found_urls = _search_news_for_trend(query)
+        except Exception as e:
+            logger.warning(f"Failed query expansion for '{query}': {e}")
+            continue
+
+        for url in found_urls:
+            if url and url not in seen:
+                seen.add(url)
+                discovered.append(url)
+        if len(discovered) >= int(getattr(config, "TREND_DISCOVERY_MAX_URLS", 12)):
+            break
+
+    if discovered:
+        logger.info(f"   Expanded topic research with {len(discovered)} supporting URLs across {len(queries)} query variants.")
+    return discovered
 
 
 def _extract_faqpage_json(text):
@@ -631,6 +718,20 @@ def _build_generation_checks(article, primary_keyword):
     elif density > 1.5:
         warnings.append('Focus keyword density may be too high.')
 
+    plain = _strip_html_tags(content).lower()
+    banned_phrases = [
+        "people are searching for",
+        "is trending on google",
+        "trending on google",
+        "search volume",
+        "rising search",
+        "google trends shows",
+    ]
+    for phrase in banned_phrases:
+        if phrase in plain:
+            warnings.append('Article discusses search popularity instead of user-facing topic value.')
+            break
+
     checks['warnings'] = warnings
     return checks
 
@@ -864,6 +965,8 @@ def generate_article(topic, source_urls=None):
     """
     logger.info(f" Generating article for: {topic.get('topic', 'Unknown')}")
 
+    topic["topic"] = _normalize_writing_topic(topic.get("topic", ""))
+
     if source_urls is None:
         source_urls = []
         for story in topic.get("stories", []):
@@ -875,27 +978,19 @@ def generate_article(topic, source_urls=None):
     if top_url and top_url not in source_urls:
         source_urls.insert(0, top_url)
 
-    is_pure_trend = True
-    if not source_urls:
-        is_pure_trend = True
-    else:
-        for url in source_urls:
-            if "trends.google.com" not in url:
-                is_pure_trend = False
-                break
-
-    if is_pure_trend:
-        keyword = topic.get("matched_keyword") or topic.get("topic", "").replace("Rising search:", "").strip()
-        logger.info(f"   Pure trend detected. Searching active news for: '{keyword}'")
-        found_urls = _search_news_for_trend(keyword)
-        if found_urls:
-            source_urls.extend(found_urls)
-            logger.info(f"   Found {len(found_urls)} background articles for context.")
+    intent = _infer_intent(topic)
+    source_urls.extend(_discover_supporting_urls(topic, intent, source_urls))
+    deduped_source_urls = []
+    seen_source_urls = set()
+    for url in source_urls:
+        if url and url not in seen_source_urls:
+            seen_source_urls.add(url)
+            deduped_source_urls.append(url)
+    source_urls = deduped_source_urls
 
     logger.info(f"  Fetching {len(source_urls)} source URLs...")
     source_texts = fetch_multiple_sources(source_urls, max_sources=8)
 
-    intent = _infer_intent(topic)
     used_summary_fallback = False
     if not source_texts:
         if intent != "recipe" and getattr(config, "BLOCK_SOURCELESS_NON_RECIPE", True):

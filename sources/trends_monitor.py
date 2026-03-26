@@ -119,8 +119,24 @@ def fetch_trending_queries():
         except Exception as e:
             logger.warning(f"Related queries error for '{core_topic}': {e}")
 
-    logger.info(f"Trends Monitor: Found {len(trends)} data points, {sum(1 for t in trends if t['is_rising'])} rising")
-    return trends
+    if getattr(config, "ENABLE_REALTIME_TRENDS", True):
+        try:
+            realtime = get_realtime_trending()
+            trends.extend(realtime)
+        except Exception as e:
+            logger.warning(f"Real-time trends merge error: {e}")
+
+    deduped = []
+    seen = set()
+    for item in trends:
+        key = (item.get("keyword", "").strip().lower(), item.get("source", "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    logger.info(f"Trends Monitor: Found {len(deduped)} data points, {sum(1 for t in deduped if t['is_rising'])} rising")
+    return deduped
 
 
 def get_realtime_trending():

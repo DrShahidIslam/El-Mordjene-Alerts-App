@@ -93,6 +93,19 @@ def build_article_prompt(topic_title, source_texts, matched_keyword="", intent="
 {src.get('text', '')[:2000]}
 """
 
+    primary_keyword = (matched_keyword or topic_title).strip()
+    keyword_pool = []
+    for candidate in [primary_keyword, topic_title]:
+        if candidate and candidate not in keyword_pool:
+            keyword_pool.append(candidate)
+    for src in source_texts[:5]:
+        for candidate in [src.get("title", ""), src.get("source_domain", "")]:
+            candidate = (candidate or "").strip()
+            if candidate and candidate not in keyword_pool:
+                keyword_pool.append(candidate)
+    secondary_keywords = ", ".join(keyword_pool[1:4]) or "Use close topical variations only when naturally supported."
+    supporting_keywords = ", ".join(keyword_pool[4:8]) or "Use supporting entities, ingredients, brands, locations, and use-cases only when source-backed."
+
     links_suggestion = "\n".join(
         f"  - [{info['anchor']}]({info['url']})"
         for info in _load_internal_links().values()
@@ -121,6 +134,8 @@ Write one complete, publish-ready article with high factual reliability and high
 TASK:
 - TRENDING TOPIC: {topic_title}
 - PRIMARY KEYWORD: {matched_keyword or topic_title}
+- SECONDARY KEYWORDS: {secondary_keywords}
+- SUPPORTING KEYWORDS / ENTITIES: {supporting_keywords}
 
 SOURCE MATERIAL (use only these facts):
 {sources_block}
@@ -135,6 +150,7 @@ NON-NEGOTIABLE RULES:
 7. Write original synthesis for readers, not stitched or lightly rewritten source passages.
 8. If source evidence is thin or uncertain, say so plainly instead of padding the article.
 9. Do not create sections, FAQs, or claims whose main purpose is ranking rather than helping the reader.
+10. Do not talk about search popularity, Google Trends, "people are searching for", or "this topic is trending" unless the article is specifically about search/marketing data.
 
 LAYOUT VARIANT TO USE:
 - Variant: {variant['name']}
@@ -156,6 +172,8 @@ STYLE REQUIREMENTS:
 - Begin with a strong 2-3 sentence hook that matches search intent and gives readers a reason to continue.
 - In the first 120 words, give a direct answer or clear summary before expanding into details.
 - The article body must not repeat the exact title as a visible heading.
+- Cover the topic comprehensively: definition/context, what matters now, practical details, caveats, alternatives or variations, and a concise conclusion.
+- Prefer concrete specifics over generic adjectives. Every major section should add new information.
 
 RECIPE ARTICLE RULES (ONLY IF THIS IS A RECIPE):
 - Use a full recipe structure with clear sections for Ingredients and Instructions.
@@ -168,6 +186,7 @@ RECIPE ARTICLE RULES (ONLY IF THIS IS A RECIPE):
 SEARCH AND HELPFULNESS REQUIREMENTS:
 - Treat PRIMARY KEYWORD as a guidance signal, not something to force unnaturally.
 - Use the focus keyword naturally when it genuinely helps clarity in the TITLE, META_DESCRIPTION, SLUG, and early body copy.
+- Use SECONDARY KEYWORDS and SUPPORTING KEYWORDS naturally across subheadings and body text only when they improve topical completeness.
 - Keep the title compelling and clear, not vague, clickbait, or artificially optimized.
 - Make the meta description specific and benefit-driven while staying within 140-160 characters.
 - Structure the article for quick comprehension first, then supporting detail.
@@ -175,6 +194,7 @@ SEARCH AND HELPFULNESS REQUIREMENTS:
 - Expand into adjacent entities, ingredients, cuisines, product types, and cultural context only when the sources support it.
 - Do not force El Mordjene, Dubai chocolate, or angel hair chocolate references unless they are central to this specific topic.
 - Avoid keyword stuffing, filler intros, generic conclusions, and near-duplicate template phrasing.
+- Build topical depth, not just keyword repetition. The article should feel complete even if a reader never saw the source articles.
 
 FAQ AND SCHEMA RULES:
 - Add FAQ only if it materially helps readers and the answers are supported by the source material.

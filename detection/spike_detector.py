@@ -185,6 +185,16 @@ def _is_excluded(text):
             return True
     return False
 
+
+def _normalize_topic_label(title, matched_keyword=""):
+    title = (title or "").strip()
+    matched_keyword = (matched_keyword or "").strip()
+    lower = title.lower()
+    if lower.startswith("rising search:"):
+        cleaned = title.split(":", 1)[1].strip()
+        return matched_keyword or cleaned or title
+    return title
+
 def _recent_topic_penalty(title, keyword, recent_topics):
     """Down-rank over-covered topic families so discovery stays broader."""
     title_lower = (title or "").lower()
@@ -217,8 +227,8 @@ def detect_spikes(all_stories, trends_data=None):
         for trend in trends_data:
             if trend.get("is_rising"):
                 combined.append({
-                    "title": f"Rising search: {trend['keyword']}",
-                    "summary": f"Google Trends shows '{trend['keyword']}' is rising ({trend.get('spike_ratio', 0)}x above average)",
+                    "title": trend["keyword"],
+                    "summary": f"Topic signal detected for '{trend['keyword']}' from trend monitoring.",
                     "url": f"https://trends.google.com/trends/explore?q={trend['keyword'].replace(' ', '+')}",
                     "source": trend.get("source", "Google Trends"),
                     "source_type": "trends",
@@ -312,7 +322,7 @@ def detect_spikes(all_stories, trends_data=None):
 
 
             trending_topics.append({
-                "topic": best_story["title"],
+                "topic": _normalize_topic_label(best_story["title"], best_story.get("matched_keyword", "")),
                 "score": score,
                 "factors": factors,
                 "stories": cluster_stories_list,
