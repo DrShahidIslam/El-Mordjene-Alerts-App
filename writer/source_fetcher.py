@@ -123,6 +123,51 @@ def _source_quality_score(url):
     return score
 
 
+def source_quality_label(domain):
+    domain = (domain or "").replace("www.", "").lower()
+    if not domain:
+        return "unknown"
+    if any(h in domain for h in TRUSTED_DOMAIN_HINTS) or domain.endswith(".gov") or domain.endswith(".edu"):
+        return "trusted"
+    if any(h in domain for h in LOW_QUALITY_DOMAIN_HINTS):
+        return "low"
+    return "standard"
+
+
+def analyze_source_collection(source_texts):
+    """Summarize source diversity and quality for editorial/publish gating."""
+    domains = []
+    trusted = []
+    low_quality = []
+
+    for src in source_texts or []:
+        domain = (src.get("source_domain") or "").replace("www.", "").lower().strip()
+        if not domain:
+            continue
+        domains.append(domain)
+        label = source_quality_label(domain)
+        if label == "trusted":
+            trusted.append(domain)
+        elif label == "low":
+            low_quality.append(domain)
+
+    unique_domains = sorted(set(domains))
+    trusted_unique = sorted(set(trusted))
+    low_unique = sorted(set(low_quality))
+
+    return {
+        "source_count": len(domains),
+        "unique_domain_count": len(unique_domains),
+        "unique_domains": unique_domains,
+        "trusted_source_count": len(trusted),
+        "trusted_unique_domains": trusted_unique,
+        "trusted_unique_count": len(trusted_unique),
+        "low_quality_source_count": len(low_quality),
+        "low_quality_unique_domains": low_unique,
+        "low_quality_unique_count": len(low_unique),
+    }
+
+
 def fetch_multiple_sources(urls, max_sources=5):
     """Fetch text from multiple source URLs."""
     sources = []

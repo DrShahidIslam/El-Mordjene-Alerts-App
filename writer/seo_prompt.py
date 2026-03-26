@@ -132,6 +132,9 @@ NON-NEGOTIABLE RULES:
 4. Keep primary keyword density under 0.8 percent in paragraph text.
 5. No emojis in body copy.
 6. Do not output WordPress block comments like <!-- wp:... -->.
+7. Write original synthesis for readers, not stitched or lightly rewritten source passages.
+8. If source evidence is thin or uncertain, say so plainly instead of padding the article.
+9. Do not create sections, FAQs, or claims whose main purpose is ranking rather than helping the reader.
 
 LAYOUT VARIANT TO USE:
 - Variant: {variant['name']}
@@ -162,20 +165,19 @@ RECIPE ARTICLE RULES (ONLY IF THIS IS A RECIPE):
 - Do not invent nutrition facts or timings if they are not supported by sources.
 - Category MUST be "Recipes" (or "Recettes" if the output language is French).
 
-SEO, AEO, AND GEO REQUIREMENTS:
-- Treat PRIMARY KEYWORD as the focus keyword for the article.
-- Use the focus keyword naturally in the TITLE, META_DESCRIPTION, SLUG, opening paragraph, and at least one <h2>.
-- Keep the title compelling and clear, not vague and not clickbait.
-- Make the meta description attractive, keyword-rich, and benefit-driven while staying within 140-160 characters.
-- Structure the article for both search engines and answer engines: fast answer first, then supporting detail.
-- Use clear entities, product names, and context so AI/search systems can identify what the page is about.
-- Use close keyword variations naturally, but keep the focus keyword as the main phrase.
-- Expand into adjacent entities, ingredients, cuisines, product types, and cultural context when the sources support it.
+SEARCH AND HELPFULNESS REQUIREMENTS:
+- Treat PRIMARY KEYWORD as a guidance signal, not something to force unnaturally.
+- Use the focus keyword naturally when it genuinely helps clarity in the TITLE, META_DESCRIPTION, SLUG, and early body copy.
+- Keep the title compelling and clear, not vague, clickbait, or artificially optimized.
+- Make the meta description specific and benefit-driven while staying within 140-160 characters.
+- Structure the article for quick comprehension first, then supporting detail.
+- Use clear entities, product names, and context so readers can immediately understand what the page is about.
+- Expand into adjacent entities, ingredients, cuisines, product types, and cultural context only when the sources support it.
 - Do not force El Mordjene, Dubai chocolate, or angel hair chocolate references unless they are central to this specific topic.
-- Avoid keyword stuffing, filler intros, and generic conclusions.
+- Avoid keyword stuffing, filler intros, generic conclusions, and near-duplicate template phrasing.
 
 FAQ AND SCHEMA RULES:
-- Add FAQ only if it helps search intent.
+- Add FAQ only if it materially helps readers and the answers are supported by the source material.
 - If FAQ is included, include valid FAQPage JSON-LD wrapped in:
   <script type="application/ld+json"> ... </script>
 - Do NOT include Recipe JSON-LD in the HTML body.

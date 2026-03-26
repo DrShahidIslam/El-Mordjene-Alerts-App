@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 from gemini_client import generate_content_with_fallback
 from writer.seo_prompt import build_article_prompt
-from writer.source_fetcher import fetch_multiple_sources
+from writer.source_fetcher import fetch_multiple_sources, analyze_source_collection
 
 logger = logging.getLogger(__name__)
 
@@ -635,6 +635,45 @@ def _build_generation_checks(article, primary_keyword):
     return checks
 
 
+def _build_policy_checks(article, topic, source_texts, intent, used_summary_fallback=False):
+    quality = analyze_source_collection(source_texts)
+    words = int(article.get("word_count") or len((article.get("content") or "").split()))
+    flags = []
+    warnings = []
+
+    if used_summary_fallback:
+        flags.append("summary_only_fallback")
+        warnings.append("Article was generated from topic summaries instead of extracted source pages.")
+
+    if quality["source_count"] < max(1, int(getattr(config, "MIN_SOURCE_COUNT", 2))):
+        flags.append("low_source_count")
+        warnings.append(f"Only {quality['source_count']} extracted source(s) were available.")
+
+    if quality["unique_domain_count"] < max(1, int(getattr(config, "MIN_UNIQUE_SOURCE_DOMAINS", 2))):
+        flags.append("low_source_diversity")
+        warnings.append(f"Only {quality['unique_domain_count']} unique source domain(s) were used.")
+
+    if words < int(getattr(config, "ARTICLE_MIN_WORDS", 800)):
+        flags.append("thin_content")
+        warnings.append(f"Article is shorter than the configured minimum ({words} words).")
+
+    needs_trusted = intent in {"news", "trend", "buyer"}
+    if needs_trusted and getattr(config, "REQUIRE_TRUSTED_SOURCE_FOR_NEWS", True) and quality["trusted_unique_count"] < 1:
+        flags.append("no_trusted_source")
+        warnings.append("No trusted or authoritative source domain was found for a news/trend/buyer article.")
+
+    block_publish = any(flag in flags for flag in {"summary_only_fallback", "low_source_count", "low_source_diversity", "no_trusted_source"})
+
+    return {
+        "source_quality": quality,
+        "flags": flags,
+        "warnings": warnings,
+        "intent": intent,
+        "block_publish": block_publish,
+        "topic": topic.get("topic", ""),
+    }
+
+
 def _content_to_line_text(content):
     if not content:
         return ""
@@ -856,7 +895,11 @@ def generate_article(topic, source_urls=None):
     logger.info(f"  Fetching {len(source_urls)} source URLs...")
     source_texts = fetch_multiple_sources(source_urls, max_sources=8)
 
+    intent = _infer_intent(topic)
+    used_summary_fallback = False
     if not source_texts:
+        if intent != "recipe" and getattr(config, "BLOCK_SOURCELESS_NON_RECIPE", True):
+            raise ValueError("No extractable sources were found, so generation was skipped to avoid weak AI-only content.")
         logger.warning("   No source material could be extracted. Using topic summary only.")
         source_texts = [{
             "title": topic.get("topic", ""),
@@ -864,8 +907,8 @@ def generate_article(topic, source_urls=None):
             "source_domain": "aggregated_summaries",
             "url": "",
         }]
+        used_summary_fallback = True
 
-    intent = _infer_intent(topic)
     prompt = build_article_prompt(
         topic_title=topic.get("topic", "Food & Recipe Update"),
         source_texts=source_texts,
@@ -896,8 +939,17 @@ def generate_article(topic, source_urls=None):
             article,
             topic.get("matched_keyword", "") or topic.get("topic", ""),
         )
+        article["policy_checks"] = _build_policy_checks(
+            article,
+            topic,
+            source_texts,
+            intent,
+            used_summary_fallback=used_summary_fallback,
+        )
         for warning in article["generation_checks"].get("warnings", []):
             logger.warning(f"   Content quality warning: {warning}")
+        for warning in article["policy_checks"].get("warnings", []):
+            logger.warning(f"   Policy-risk warning: {warning}")
         logger.info(f"   Article generated: '{article['title']}' ({article['word_count']} words)")
     else:
         logger.error("   Failed to parse Gemini output")

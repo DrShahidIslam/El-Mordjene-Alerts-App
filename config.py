@@ -198,6 +198,10 @@ WP_DEFAULT_STATUS = "draft"
 
 ARTICLE_MIN_WORDS = 800
 ARTICLE_MAX_WORDS = 1500
+MIN_SOURCE_COUNT = int(os.getenv("MIN_SOURCE_COUNT", "2"))
+MIN_UNIQUE_SOURCE_DOMAINS = int(os.getenv("MIN_UNIQUE_SOURCE_DOMAINS", "2"))
+BLOCK_SOURCELESS_NON_RECIPE = os.getenv("BLOCK_SOURCELESS_NON_RECIPE", "true").lower() in ("true", "1", "yes")
+REQUIRE_TRUSTED_SOURCE_FOR_NEWS = os.getenv("REQUIRE_TRUSTED_SOURCE_FOR_NEWS", "true").lower() in ("true", "1", "yes")
 GEMINI_MODEL = "gemini-2.5-flash"
 SKIP_AI_IMAGE = os.getenv("SKIP_AI_IMAGE", "false").lower() in ("true", "1", "yes")
 USE_GEMINI_IMAGEN = os.getenv("USE_GEMINI_IMAGEN", "false").lower() in ("true", "1", "yes")

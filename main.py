@@ -412,6 +412,12 @@ def _handle_approve(state, status="draft"):
         send_simple_message(" No pending article to approve.")
         return
 
+    policy_checks = article.get("policy_checks") or {}
+    if status == "publish" and policy_checks.get("block_publish"):
+        warnings = policy_checks.get("warnings") or ["Sourcing or quality guard blocked direct publish."]
+        send_simple_message(" Publish blocked by quality guard:\n- " + "\n- ".join(warnings[:5]))
+        return
+
     consistency_warnings = rankmath_polylang_warnings(article)
     if consistency_warnings:
         send_simple_message(" Pre-publish checks:\n- " + "\n- ".join(consistency_warnings[:5]))

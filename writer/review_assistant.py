@@ -90,10 +90,22 @@ def rankmath_polylang_warnings(article):
     return warnings
 
 
+def policy_warnings(article):
+    checks = article.get("policy_checks") or {}
+    warnings = list(checks.get("warnings") or [])
+    if checks.get("block_publish"):
+        warnings.append("Publish guard is active until sourcing/editorial issues are fixed.")
+    return warnings
+
+
 def build_preapproval_checklist(article, topic, conn=None, duplicate_warning=None):
     sources = [s for s in (article.get("sources_used") or []) if s and s != "aggregated_summaries"]
     src_count = len(set(sources))
     words = int(article.get("word_count") or len(_strip_html(article.get("content", "")).split()))
+    policy_checks = article.get("policy_checks") or {}
+    source_quality = policy_checks.get("source_quality") or {}
+    trusted_count = int(source_quality.get("trusted_unique_count") or 0)
+    policy_notes = policy_warnings(article)
 
     lang_ok, lang_msg = language_consistency(article)
     schema_ok, schema_msg = schema_presence(article)
@@ -101,6 +113,7 @@ def build_preapproval_checklist(article, topic, conn=None, duplicate_warning=Non
     lines = [
         "Pre-approval checklist",
         f"- Sources used: {src_count}",
+        f"- Trusted source domains: {trusted_count}",
         f"- Word count: {words}",
         f"- {lang_msg}",
         f"- {schema_msg}",
@@ -111,6 +124,8 @@ def build_preapproval_checklist(article, topic, conn=None, duplicate_warning=Non
 
     if src_count < 2:
         lines.append("- Warning: low source diversity (<2 domains)")
+    for warning in policy_notes[:5]:
+        lines.append(f"- Warning: {warning}")
     if not lang_ok:
         lines.append("- Warning: language consistency needs review")
     if not schema_ok:
