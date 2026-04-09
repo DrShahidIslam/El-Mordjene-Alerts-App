@@ -1,9 +1,9 @@
 name: El-Mordjene News Agent - Scan
 
 on:
-  # Run every 45 minutes (fits free tier, gives time to review alerts)
+  # Run once every 4 hours (fits free tier, gives time to review alerts)
   schedule:
-    - cron: '*/45 * * * *'
+    - cron: '0 */4 * * *'
 
   # Also allow manual trigger from GitHub UI
   workflow_dispatch:
